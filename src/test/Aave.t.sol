@@ -9,6 +9,7 @@ import {MockRollupProcessor} from "./../aztec/MockRollupProcessor.sol";
 
 // Aave-specific imports
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Detailed} from "./../bridges/aave/interfaces/IERC20.sol";
 import {AaveLendingBridge} from "./../bridges/aave/AaveLending.sol";
 import {IPool} from "./../bridges/aave/interfaces/IPool.sol";
 import {ILendingPoolAddressesProvider} from "./../bridges/aave/interfaces/ILendingPoolAddressesProvider.sol";
@@ -56,6 +57,7 @@ contract AaveTest is DSTest {
             aaveLendingBridge.underlyingToZkAToken(address(dai)),
             address(0)
         );
+
         /// Add invalid (revert)
         vm.expectRevert("AaveLendingBridge: NO_LENDING_POOL");
         aaveLendingBridge.setUnderlyingToZkAToken(address(0xdead));
@@ -70,6 +72,29 @@ contract AaveTest is DSTest {
         /// Add dai again (revert)
         vm.expectRevert("AaveLendingBridge: ZK_TOKEN_SET");
         aaveLendingBridge.setUnderlyingToZkAToken(address(dai));
+    }
+
+    function testZKATokenNaming() public {
+        _setupDai();
+        IERC20Detailed zkToken = IERC20Detailed(
+            aaveLendingBridge.underlyingToZkAToken(address(dai))
+        );
+
+        assertEq(
+            zkToken.symbol(),
+            "ZK-aDAI",
+            "The zkAToken token symbol don't match"
+        );
+        assertEq(
+            zkToken.name(),
+            "ZK-Aave interest bearing DAI",
+            "The zkAToken token name don't match"
+        );
+        assertEq(
+            zkToken.decimals(),
+            aDai.decimals(),
+            "The zkAToken token decimals don't match"
+        );
     }
 
     function testEnterWithDai(uint128 depositAmount, uint16 timeDiff) public {
@@ -108,7 +133,7 @@ contract AaveTest is DSTest {
         _exitWithDai(withdrawAmount);
     }
 
-    function testExitPartiallyTenCompletely(
+    function testExitPartiallyThenCompletely(
         uint128 depositAmount,
         uint16 timeDiff1,
         uint16 timeDiff2

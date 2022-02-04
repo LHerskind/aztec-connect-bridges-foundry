@@ -35,7 +35,17 @@ contract AaveLendingBridge is IDefiBridge {
         addressesProvider = ILendingPoolAddressesProvider(_addressesProvider);
     }
 
+    /**
+     * @notice Add the underlying asset to the set of supported assets
+     * @dev For the underlying to be accepted, the asset must be supported in Aave
+     * @dev Underlying assets that already is supported cannot be added again.
+     */
     function setUnderlyingToZkAToken(address underlyingAsset) external {
+        require(
+            underlyingToZkAToken[underlyingAsset] == address(0),
+            "AaveLendingBridge: ZK_TOKEN_SET"
+        );
+
         IPool pool = IPool(addressesProvider.getLendingPool());
 
         IERC20Detailed aToken = IERC20Detailed(
@@ -46,14 +56,12 @@ contract AaveLendingBridge is IDefiBridge {
             address(aToken) != address(0),
             "AaveLendingBridge: NO_LENDING_POOL"
         );
-        require(
-            underlyingToZkAToken[underlyingAsset] == address(0),
-            "AaveLendingBridge: ZK_TOKEN_SET"
-        );
 
-        // TODO add AztecAAVEBridge token to name / symbol
+        string memory name = string(abi.encodePacked("ZK-", aToken.name()));
+        string memory symbol = string(abi.encodePacked("ZK-", aToken.symbol()));
+
         underlyingToZkAToken[underlyingAsset] = address(
-            new ZkAToken(aToken.name(), aToken.symbol(), aToken.decimals())
+            new ZkAToken(name, symbol, aToken.decimals())
         );
     }
 

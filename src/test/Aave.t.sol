@@ -17,6 +17,7 @@ import {IAToken} from "./../bridges/aave/interfaces/IAToken.sol";
 import {ZkAToken} from "./../bridges/aave/ZkAToken.sol";
 import {AztecTypes} from "./../aztec/AztecTypes.sol";
 import {WadRayMath} from "./../bridges/aave/libraries/WadRayMath.sol";
+import {Errors} from "./../bridges/aave/libraries/Errors.sol";
 
 contract AaveTest is DSTest {
     using WadRayMath for uint256;
@@ -59,7 +60,7 @@ contract AaveTest is DSTest {
         );
 
         /// Add invalid (revert)
-        vm.expectRevert("AaveLendingBridge: NO_LENDING_POOL");
+        vm.expectRevert(bytes(Errors.INVALID_ATOKEN));
         aaveLendingBridge.setUnderlyingToZkAToken(address(0xdead));
 
         /// Add dai
@@ -70,7 +71,7 @@ contract AaveTest is DSTest {
         );
 
         /// Add dai again (revert)
-        vm.expectRevert("AaveLendingBridge: ZK_TOKEN_SET");
+        vm.expectRevert(bytes(Errors.ZK_TOKEN_ALREADY_SET));
         aaveLendingBridge.setUnderlyingToZkAToken(address(dai));
     }
 
@@ -95,6 +96,12 @@ contract AaveTest is DSTest {
             aDai.decimals(),
             "The zkAToken token decimals don't match"
         );
+    }
+
+    function testEnterWithDaiGas() public {
+        _setupDai();
+        _enterWithDai(100 ether);
+        _accrueInterest(60 * 60 * 24);
     }
 
     function testEnterWithDai(uint128 depositAmount, uint16 timeDiff) public {

@@ -98,15 +98,21 @@ contract AaveTest is DSTest {
         );
     }
 
-    function testEnterWithDaiGas() public {
+    function testFailEnterWithDai() public {
+        _setupDai();
+        _enterWithDai(0);
+    }
+
+    function testFailExitPartially() public {
         _setupDai();
         _enterWithDai(100 ether);
         _accrueInterest(60 * 60 * 24);
+        _exitWithDai(0);
     }
 
     function testEnterWithDai(uint128 depositAmount, uint16 timeDiff) public {
         _setupDai();
-        _enterWithDai(depositAmount);
+        _enterWithDai(depositAmount + 1); // dai amount in [1; 2**128]
         _accrueInterest(timeDiff);
     }
 
@@ -116,11 +122,9 @@ contract AaveTest is DSTest {
         uint16 timeDiff
     ) public {
         _setupDai();
-        _enterWithDai(depositAmount1);
-
+        _enterWithDai(depositAmount1 + 1); // dai amount in [1; 2**128]
         _accrueInterest(timeDiff);
-
-        _enterWithDai(depositAmount2);
+        _enterWithDai(depositAmount2 + 1); // dai amount in [1; 2**128]
     }
 
     function testExitPartially(
@@ -128,14 +132,19 @@ contract AaveTest is DSTest {
         uint128 withdrawAmount,
         uint16 timeDiff
     ) public {
-        while (withdrawAmount > depositAmount / 2) {
-            withdrawAmount /= 2;
-        }
+        // Withdraw and deposit amounts must be > 0 and withdrawAmount * index < depositAmount
+        uint256 depositAmount = depositAmount + 3;
+
+        uint256 index = pool.getReserveNormalizedIncome(address(dai));
+        uint256 scaledDepositAmount = uint256(depositAmount).rayDiv(index);
 
         _setupDai();
         _enterWithDai(depositAmount);
-
         _accrueInterest(timeDiff);
+
+        if (withdrawAmount >= scaledDepositAmount) {
+            withdrawAmount = uint128(scaledDepositAmount / 2 + 1);
+        }
 
         _exitWithDai(withdrawAmount);
     }
@@ -145,8 +154,10 @@ contract AaveTest is DSTest {
         uint16 timeDiff1,
         uint16 timeDiff2
     ) public {
+        uint256 depositAmount = depositAmount + 3;
+
         _setupDai();
-        _enterWithDai(depositAmount);
+        _enterWithDai(depositAmount + 1); // dai amount in [1; 2**128]
 
         _accrueInterest(timeDiff1);
 
@@ -169,7 +180,7 @@ contract AaveTest is DSTest {
 
     function testExitCompletely(uint128 depositAmount, uint16 timeDiff) public {
         _setupDai();
-        _enterWithDai(depositAmount);
+        _enterWithDai(depositAmount + 1); // dai amount in [1; 2**128]
 
         Balances memory balances = _getBalances();
 

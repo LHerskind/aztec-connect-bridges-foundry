@@ -217,6 +217,8 @@ contract MockRollupProcessor is DSTest {
             )
         );
 
+        require(success, "Bridge call fall");
+
         if (success) {
             (outputValueA, outputValueB, isAsync) = abi.decode(
                 result,

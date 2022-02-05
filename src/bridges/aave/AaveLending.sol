@@ -10,6 +10,7 @@ import {ILendingPoolAddressesProvider} from "./interfaces/ILendingPoolAddressesP
 import {IERC20Detailed, IERC20} from "./interfaces/IERC20.sol";
 import {IPool} from "./interfaces/IPool.sol";
 import {IScaledBalanceToken} from "./interfaces/IScaledBalanceToken.sol";
+import {IIncentivesController} from "./interfaces/IIncentivesController.sol";
 
 import {AztecTypes} from "../../aztec/AztecTypes.sol";
 
@@ -25,14 +26,20 @@ contract AaveLendingBridge is IDefiBridge {
 
     address public immutable rollupProcessor;
     ILendingPoolAddressesProvider public immutable addressesProvider;
+    address public immutable rewardsBeneficiary;
 
     /// Mapping underlying assets to the zk atoken used for accounting
     mapping(address => address) public underlyingToZkAToken;
 
-    constructor(address _rollupProcessor, address _addressesProvider) public {
+    constructor(
+        address _rollupProcessor,
+        address _addressesProvider,
+        address _rewardsBeneficiary
+    ) public {
         rollupProcessor = _rollupProcessor;
         /// @dev addressesProvider is used to fetch pool, used in case Aave governance update pool proxy
         addressesProvider = ILendingPoolAddressesProvider(_addressesProvider);
+        rewardsBeneficiary = _rewardsBeneficiary;
     }
 
     /**
@@ -200,9 +207,10 @@ contract AaveLendingBridge is IDefiBridge {
             address(this)
         );
 
+        /// 3. Approve rollup to spend underlying
         IERC20Detailed(underlyingAsset).approve(rollupProcessor, outputValue);
 
-        // 3. Burn the supplied amount of zkAToken as this has now been withdrawn
+        // 4. Burn the supplied amount of zkAToken as this has now been withdrawn
         IZkAToken(underlyingToZkAToken[underlyingAsset]).burn(scaledAmount);
 
         return outputValue;
@@ -225,7 +233,7 @@ contract AaveLendingBridge is IDefiBridge {
         require(false);
     }
 
-    function claimLiquidityRewards(address a) external {
+    function claimLiquidityRewards(address[] calldata asset) external {
         /*
       // Ideas
        1. Dump per enter and exit, add to deposit and create a rewards index : Everyone gets a better interest rate, not exact. Don't get AAVE TOken

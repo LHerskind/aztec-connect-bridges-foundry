@@ -3,7 +3,9 @@ src = 'src'
 out = 'out'
 libs = ['lib']
 remappings = ['ds-test/=lib/ds-test/src/', '@openzeppelin/=node_modules/@openzeppelin/']
-fuzz_runs = 256
+fuzz_runs = 10000
 gas_reports = ["*"]
+solc_version = '0.8.10'
+auto_detect_solc = false
 ETH_RPC_URL = 'https://mainnet.infura.io/v3/9928b52099854248b3a096be07a6b23c'
 # See more config options https://github.com/gakonst/foundry/tree/master/config

@@ -10,8 +10,7 @@ import {ILendingPoolAddressesProvider} from "./interfaces/ILendingPoolAddressesP
 import {IERC20Detailed, IERC20} from "./interfaces/IERC20.sol";
 import {IPool} from "./interfaces/IPool.sol";
 import {IScaledBalanceToken} from "./interfaces/IScaledBalanceToken.sol";
-import {IIncentivesController} from "./interfaces/IIncentivesController.sol";
-
+import {IAaveIncentivesController} from "./interfaces/IAaveIncentivesController.sol";
 import {AztecTypes} from "../../aztec/AztecTypes.sol";
 
 import {ZkAToken, IZkAToken} from "./ZkAToken.sol";
@@ -233,14 +232,26 @@ contract AaveLendingBridge is IDefiBridge {
         require(false);
     }
 
-    function claimLiquidityRewards(address[] calldata asset) external {
-        /*
-      // Ideas
-       1. Dump per enter and exit, add to deposit and create a rewards index : Everyone gets a better interest rate, not exact. Don't get AAVE TOken
-       2. Use outputAssetB as a virtual asset and let Whales claim their pro-rata share of the rewards : Only whales can do this, get AAVE Token
-       3. Use outputAssetB as a virtual asset. Aztec to create a rewards proof later... or not.
-       4. Send to Aztec Fee Contract - swap stkAAVE for AAVE - swap for ETH and use to subsidize.
-       5. Send to Gitcoin grants
-       */
+    /**
+     * @notice Claim liquidity mining rewards and transfer to the beneficiary
+     */
+    function claimLiquidityRewards(
+        address incentivesController,
+        address[] calldata assets
+    ) external returns (uint256) {
+        // Just to have an initial claim rewards function
+        // Don't like that we are accepting any contract from the users. Not obvious how they would abuse though.
+        // Assets are approved to the lendingPool, but it does not have a claimRewards function that can be abused.
+        // The malicious controller can be used to reenter. But limited what can be entered again as convert can only be entered by the processor.
+        // To limit attack surface. Can pull incentives controller from assets and ensure that the assets are actually supported assets.
+        IAaveIncentivesController controller = IAaveIncentivesController(
+            incentivesController
+        );
+        return
+            controller.claimRewards(
+                assets,
+                type(uint256).max,
+                rewardsBeneficiary
+            );
     }
 }

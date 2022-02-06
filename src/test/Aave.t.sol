@@ -13,6 +13,7 @@ import {IERC20Detailed} from "./../bridges/aave/interfaces/IERC20.sol";
 import {AaveLendingBridge} from "./../bridges/aave/AaveLending.sol";
 import {IPool} from "./../bridges/aave/interfaces/IPool.sol";
 import {ILendingPoolAddressesProvider} from "./../bridges/aave/interfaces/ILendingPoolAddressesProvider.sol";
+import {IAaveIncentivesController} from "./../bridges/aave/interfaces/IAaveIncentivesController.sol";
 import {IAToken} from "./../bridges/aave/interfaces/IAToken.sol";
 import {ZkAToken} from "./../bridges/aave/ZkAToken.sol";
 import {AztecTypes} from "./../aztec/AztecTypes.sol";
@@ -34,8 +35,15 @@ contract AaveTest is DSTest {
         );
     IERC20 constant dai = IERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     IAToken constant aDai = IAToken(0x028171bCA77440897B824Ca71D1c56caC55b68A3);
+    IERC20 constant stkAave =
+        IERC20(0x4da27a545c0c5B758a6BA100e3a049001de870f5);
 
     IPool pool = IPool(addressesProvider.getLendingPool());
+
+    address constant beneficiary = address(0xbe);
+
+    IAaveIncentivesController constant incentives =
+        IAaveIncentivesController(0xd784927Ff2f95ba542BfC824c8a8a98F3495f6b5);
 
     function _aztecPreSetup() internal {
         defiBridgeProxy = new DefiBridgeProxy();
@@ -47,7 +55,8 @@ contract AaveTest is DSTest {
 
         aaveLendingBridge = new AaveLendingBridge(
             address(rollupProcessor),
-            address(addressesProvider)
+            address(addressesProvider),
+            beneficiary
         );
 
         _setTokenBalance(address(dai), address(0xdead), 42069);
@@ -101,6 +110,11 @@ contract AaveTest is DSTest {
     function testFailEnterWithDai() public {
         _setupDai();
         _enterWithDai(0);
+    }
+
+    function testEnterWithDaiBigValues() public {
+        _setupDai();
+        _enterWithDai(type(uint128).max);
     }
 
     function testFailExitPartially() public {
@@ -184,7 +198,7 @@ contract AaveTest is DSTest {
 
         Balances memory balances = _getBalances();
 
-        _accrueInterest(timeDiff);
+        _accrueInterest(timeDiff + 1); // Ensure that some time have passed
 
         _exitWithDai(balances.rollupZk);
 
@@ -192,9 +206,40 @@ contract AaveTest is DSTest {
         assertLt(
             balances.rollupZk,
             depositAmount,
-            "never entered, or entered at index = 1"
+            "entered at index = 1 RAY with and no interest accrual"
         );
         assertEq(balancesAfter.rollupZk, 0, "Not exited with everything");
+    }
+
+    function testClaimRewardsFixed() public {
+        testClaimRewards(39440128, 27969);
+    }
+
+    function testClaimRewards(uint128 depositAmount, uint16 timeDiff) public {
+        _setupDai();
+        _enterWithDai(depositAmount + 1); // dai amount in [1; 2**128]
+        _accrueInterest(timeDiff);
+
+        address[] memory assets = new address[](1);
+        assets[0] = address(aDai);
+
+        assertEq(
+            stkAave.balanceOf(address(aaveLendingBridge)),
+            0,
+            "Already have reward tokens"
+        );
+
+        uint256 expectedRewards = aaveLendingBridge.claimLiquidityRewards(
+            address(incentives),
+            assets
+        );
+
+        // The claiming of liquidity rewards is not always returning the actual value increase
+        assertCloseTo(
+            stkAave.balanceOf(address(aaveLendingBridge)),
+            expectedRewards,
+            2
+        );
     }
 
     /// Helpers
@@ -205,6 +250,19 @@ contract AaveTest is DSTest {
             emit log_named_address("  Expected", b);
             emit log_named_address("    Actual", a);
             fail();
+        }
+    }
+
+    function assertCloseTo(
+        uint256 a,
+        uint256 b,
+        uint256 c
+    ) internal {
+        uint256 diff = a > b ? a - b : b - a;
+        if (diff > c) {
+            emit log("Error: a close to b not satisfied [uint256]");
+            emit log_named_uint(" Expected", b);
+            emit log_named_uint("   Actual", a);
         }
     }
 

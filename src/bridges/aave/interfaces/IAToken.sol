@@ -4,7 +4,13 @@ pragma solidity >=0.6.10 <=0.8.10;
 pragma experimental ABIEncoderV2;
 
 import {IERC20Detailed} from "./IERC20.sol";
+import {IAaveIncentivesController} from "./IAaveIncentivesController.sol";
 
 interface IAToken is IERC20Detailed {
     function scaledBalanceOf(address user) external view returns (uint256);
+
+    function getIncentivesController()
+        external
+        view
+        returns (IAaveIncentivesController);
 }

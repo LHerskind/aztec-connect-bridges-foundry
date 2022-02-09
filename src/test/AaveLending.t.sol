@@ -15,12 +15,11 @@ import {IPool} from "./../bridges/aave/interfaces/IPool.sol";
 import {ILendingPoolAddressesProvider} from "./../bridges/aave/interfaces/ILendingPoolAddressesProvider.sol";
 import {IAaveIncentivesController} from "./../bridges/aave/interfaces/IAaveIncentivesController.sol";
 import {IAToken} from "./../bridges/aave/interfaces/IAToken.sol";
-import {ZkAToken} from "./../bridges/aave/ZkAToken.sol";
 import {AztecTypes} from "./../aztec/AztecTypes.sol";
 import {WadRayMath} from "./../bridges/aave/libraries/WadRayMath.sol";
 import {Errors} from "./../bridges/aave/libraries/Errors.sol";
 
-contract AaveTest is DSTest {
+contract AaveLendingTest is DSTest {
     using WadRayMath for uint256;
 
     Vm vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);

@@ -4,6 +4,7 @@ pragma solidity >=0.6.10 <=0.8.10;
 pragma experimental ABIEncoderV2;
 
 import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
@@ -25,6 +26,7 @@ import {Errors} from "./libraries/Errors.sol";
 contract AaveLendingBridge is IDefiBridge {
     using SafeMath for uint256;
     using WadRayMath for uint256;
+    using SafeERC20 for IERC20;
 
     address public immutable rollupProcessor;
     ILendingPoolAddressesProvider public immutable addressesProvider;
@@ -162,7 +164,7 @@ contract AaveLendingBridge is IDefiBridge {
         uint256 scaledBalance = aToken.scaledBalanceOf(address(this));
 
         // 2. Approve totalInputValue to be lent on AAVE
-        IERC20(underlyingAsset).approve(address(pool), amount);
+        IERC20(underlyingAsset).safeIncreaseAllowance(address(pool), amount);
 
         // 3. Lend totalInputValue of inputAssetA on AAVE lending pool
         pool.deposit(underlyingAsset, amount, address(this), 0);
@@ -201,7 +203,10 @@ contract AaveLendingBridge is IDefiBridge {
         );
 
         // 3. Approve rollup to spend underlying
-        IERC20(underlyingAsset).approve(rollupProcessor, outputValue);
+        IERC20(underlyingAsset).safeIncreaseAllowance(
+            rollupProcessor,
+            outputValue
+        );
 
         // 4. Burn the supplied amount of zkAToken as this has now been withdrawn
         IAccountingToken(underlyingToZkAToken[underlyingAsset]).burn(

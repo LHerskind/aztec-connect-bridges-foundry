@@ -9,9 +9,11 @@ import {MockRollupProcessor} from "./../aztec/MockRollupProcessor.sol";
 
 // Aave-specific imports
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Detailed} from "./../bridges/aave/interfaces/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+
+import {IWETH9} from "./../bridges/aave/interfaces/IWETH9.sol";
 import {AaveLendingBridge} from "./../bridges/aave/AaveLending.sol";
-import {IPool} from "./../bridges/aave/interfaces/IPool.sol";
+import {ILendingPool} from "./../bridges/aave/interfaces/ILendingPool.sol";
 import {ILendingPoolAddressesProvider} from "./../bridges/aave/interfaces/ILendingPoolAddressesProvider.sol";
 import {IAaveIncentivesController} from "./../bridges/aave/interfaces/IAaveIncentivesController.sol";
 import {IAToken} from "./../bridges/aave/interfaces/IAToken.sol";
@@ -26,8 +28,6 @@ contract AaveLendingTest is DSTest {
 
     Vm vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
-    // TODO: Must check using both USDT, WETH etc
-
     DefiBridgeProxy defiBridgeProxy;
     MockRollupProcessor rollupProcessor;
 
@@ -38,7 +38,8 @@ contract AaveLendingTest is DSTest {
         );
     IERC20 constant stkAave =
         IERC20(0x4da27a545c0c5B758a6BA100e3a049001de870f5);
-    IPool pool = IPool(addressesProvider.getLendingPool());
+
+    ILendingPool pool = ILendingPool(addressesProvider.getLendingPool());
 
     address constant beneficiary = address(0xbe);
 
@@ -52,13 +53,16 @@ contract AaveLendingTest is DSTest {
     // minimum 1 whole token, maximum (2**128-1) / (10**(18 - aToken.decimals()))
     uint256 internal divisor;
     uint256 internal minValue;
+    uint256 internal maxValue;
 
     IERC20 constant dai = IERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
     IERC20 constant usdt = IERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
     IERC20 constant usdc = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
     IERC20 constant wbtc = IERC20(0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599);
+    IWETH9 public constant WETH =
+        IWETH9(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
-    IERC20[] tokens = [dai, usdt, usdc, wbtc];
+    IERC20[] tokens = [dai, usdt, usdc, wbtc, IERC20(address(WETH))];
 
     function _aztecPreSetup() internal {
         defiBridgeProxy = new DefiBridgeProxy();
@@ -70,6 +74,7 @@ contract AaveLendingTest is DSTest {
         DataTypes.ReserveData memory data = pool.getReserveData(address(token));
         aToken = IAToken(pool.getReserveData(address(token)).aTokenAddress);
         minValue = 10**aToken.decimals();
+        maxValue = 1e12 * 10**aToken.decimals();
         divisor = 10**(18 - aToken.decimals());
     }
 
@@ -85,9 +90,10 @@ contract AaveLendingTest is DSTest {
     }
 
     function testAddTokensToMapping() public {
+        emit log_named_address("Pool", address(pool));
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
-            emit log(aToken.name());
+            emit log_named_address(aToken.name(), address(aToken));
             _addTokenToMapping();
         }
     }
@@ -123,7 +129,7 @@ contract AaveLendingTest is DSTest {
 
     function _ZKATokenNaming() public {
         _setupToken();
-        IERC20Detailed zkToken = IERC20Detailed(
+        IERC20Metadata zkToken = IERC20Metadata(
             aaveLendingBridge.underlyingToZkAToken(address(token))
         );
 
@@ -148,9 +154,21 @@ contract AaveLendingTest is DSTest {
         _enterWithToken(0);
     }
 
+    function testFailEnterWithEther() public {
+        _tokenSetup(WETH);
+        _setupToken();
+        _enterWithEther(0);
+    }
+
     function testEnterWithTokenBigValues() public {
         _setupToken();
         _enterWithToken(type(uint128).max);
+    }
+
+    function testEnterWithEtherBigValues() public {
+        _tokenSetup(WETH);
+        _setupToken();
+        _enterWithEther(type(uint128).max);
     }
 
     function testFailExitPartially() public {
@@ -160,13 +178,35 @@ contract AaveLendingTest is DSTest {
         _exitWithToken(0);
     }
 
+    function testFailExitPartiallyEther() public {
+        _tokenSetup(WETH);
+        _setupToken();
+        _enterWithEther(100 ether / divisor);
+        _accrueInterest(60 * 60 * 24);
+        _exitWithEther(0);
+    }
+
     function testEnterWithToken(uint128 depositAmount, uint16 timeDiff) public {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
             _setupToken();
-            _enterWithToken(max(depositAmount / divisor, minValue));
+            _enterWithToken(cut(depositAmount / divisor, maxValue, minValue));
             _accrueInterest(timeDiff);
         }
+    }
+
+    function testEnterWithEther(uint128 depositAmount, uint16 timeDiff) public {
+        _tokenSetup(WETH);
+        _setupToken();
+        _enterWithEther(cut(depositAmount / divisor, maxValue, minValue));
+        _accrueInterest(timeDiff);
+    }
+
+    function testEnterWithNoEther() public {
+        _tokenSetup(WETH);
+        _setupToken();
+        _enterWithEther(cut(0, maxValue, minValue));
+        _accrueInterest(0);
     }
 
     function testAdditionalEnter(
@@ -177,10 +217,22 @@ contract AaveLendingTest is DSTest {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
             _setupToken();
-            _enterWithToken(max(depositAmount1 / divisor, minValue));
+            _enterWithToken(cut(depositAmount1 / divisor, maxValue, minValue));
             _accrueInterest(timeDiff);
-            _enterWithToken(max(depositAmount2 / divisor, minValue));
+            _enterWithToken(cut(depositAmount2 / divisor, maxValue, minValue));
         }
+    }
+
+    function testAdditionalEnterEther(
+        uint128 depositAmount1,
+        uint128 depositAmount2,
+        uint16 timeDiff
+    ) public {
+        _tokenSetup(WETH);
+        _setupToken();
+        _enterWithEther(cut(depositAmount1 / divisor, maxValue, minValue));
+        _accrueInterest(timeDiff);
+        _enterWithEther(cut(depositAmount2 / divisor, maxValue, minValue));
     }
 
     function testExitPartially(
@@ -191,7 +243,11 @@ contract AaveLendingTest is DSTest {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
 
-            uint256 depositAmount = max(depositAmount / divisor, minValue);
+            uint256 depositAmount = cut(
+                depositAmount / divisor,
+                maxValue,
+                minValue
+            );
             uint256 index = pool.getReserveNormalizedIncome(address(token));
             uint256 scaledDepositAmount = uint256(depositAmount).rayDiv(index);
 
@@ -207,6 +263,30 @@ contract AaveLendingTest is DSTest {
         }
     }
 
+    function testExitPartiallyEther(
+        uint128 depositAmount,
+        uint128 withdrawAmount,
+        uint16 timeDiff
+    ) public {
+        _tokenSetup(WETH);
+
+        uint256 depositAmount = cut(
+            depositAmount / divisor,
+            maxValue,
+            minValue
+        );
+        uint256 index = pool.getReserveNormalizedIncome(address(token));
+        uint256 scaledDepositAmount = uint256(depositAmount).rayDiv(index);
+
+        _setupToken();
+        _enterWithEther(depositAmount);
+        _accrueInterest(timeDiff);
+
+        withdrawAmount = uint128(min(withdrawAmount, scaledDepositAmount / 2));
+
+        _exitWithEther(withdrawAmount);
+    }
+
     function testExitPartiallyThenCompletely(
         uint128 depositAmount,
         uint16 timeDiff1,
@@ -215,7 +295,11 @@ contract AaveLendingTest is DSTest {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
 
-            uint256 depositAmount = max(depositAmount / divisor, minValue);
+            uint256 depositAmount = cut(
+                depositAmount / divisor,
+                maxValue,
+                minValue
+            );
 
             _setupToken();
             _enterWithToken(depositAmount);
@@ -241,12 +325,52 @@ contract AaveLendingTest is DSTest {
         }
     }
 
+    function testExitPartiallyThenCompletelyEther(
+        uint128 depositAmount,
+        uint16 timeDiff1,
+        uint16 timeDiff2
+    ) public {
+        _tokenSetup(WETH);
+
+        uint256 depositAmount = cut(
+            depositAmount / divisor,
+            maxValue,
+            minValue
+        );
+
+        _setupToken();
+        _enterWithEther(depositAmount);
+
+        _accrueInterest(timeDiff1);
+
+        _exitWithEther(depositAmount / 2);
+
+        Balances memory balances = _getBalances();
+
+        _accrueInterest(timeDiff2);
+
+        _exitWithEther(balances.rollupZk);
+
+        Balances memory balancesAfter = _getBalances();
+
+        assertLt(
+            balances.rollupZk,
+            depositAmount,
+            "never entered, or entered at index = 1"
+        );
+        assertEq(balancesAfter.rollupZk, 0, "Not exited with everything");
+    }
+
     function testExitCompletely(uint128 depositAmount, uint16 timeDiff) public {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
 
             _setupToken();
-            uint256 depositAmount = max(depositAmount / divisor, minValue);
+            uint256 depositAmount = cut(
+                depositAmount / divisor,
+                maxValue,
+                minValue
+            );
 
             _enterWithToken(depositAmount);
 
@@ -267,12 +391,42 @@ contract AaveLendingTest is DSTest {
         }
     }
 
+    function testExitCompletelyEther(uint128 depositAmount, uint16 timeDiff)
+        public
+    {
+        _tokenSetup(WETH);
+
+        _setupToken();
+        uint256 depositAmount = cut(
+            depositAmount / divisor,
+            maxValue,
+            minValue
+        );
+
+        _enterWithEther(depositAmount);
+
+        Balances memory balances = _getBalances();
+
+        _accrueInterest(timeDiff + 1); // Ensure that some time have passed
+
+        _exitWithEther(balances.rollupZk);
+
+        Balances memory balancesAfter = _getBalances();
+
+        assertLt(
+            balances.rollupZk,
+            depositAmount,
+            "entered at index = 1 RAY with and no interest accrual"
+        );
+        assertEq(balancesAfter.rollupZk, 0, "Not exited with everything");
+    }
+
     function testClaimRewards(uint128 depositAmount, uint16 timeDiff) public {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
 
             _setupToken();
-            _enterWithToken(max(depositAmount / divisor, minValue));
+            _enterWithToken(cut(depositAmount / divisor, maxValue, minValue));
             _accrueInterest(timeDiff);
 
             address[] memory assets = new address[](1);
@@ -296,6 +450,37 @@ contract AaveLendingTest is DSTest {
                 2
             );
         }
+    }
+
+    function testClaimRewardsEther(uint128 depositAmount, uint16 timeDiff)
+        public
+    {
+        _tokenSetup(WETH);
+
+        _setupToken();
+        _enterWithEther(cut(depositAmount / divisor, maxValue, minValue));
+        _accrueInterest(timeDiff);
+
+        address[] memory assets = new address[](1);
+        assets[0] = address(aToken);
+
+        assertEq(
+            stkAave.balanceOf(address(aaveLendingBridge)),
+            0,
+            "Already have reward tokens"
+        );
+
+        uint256 expectedRewards = aaveLendingBridge.claimLiquidityRewards(
+            address(incentives),
+            assets
+        );
+
+        // The claiming of liquidity rewards is not always returning the actual value increase
+        assertCloseTo(
+            stkAave.balanceOf(address(aaveLendingBridge)),
+            expectedRewards,
+            2
+        );
     }
 
     /// Helpers
@@ -336,6 +521,8 @@ contract AaveLendingTest is DSTest {
             slot = 9;
         } else if (token == address(wbtc)) {
             slot = 0;
+        } else if (token == address(WETH)) {
+            slot = 3;
         }
 
         vm.store(
@@ -348,8 +535,11 @@ contract AaveLendingTest is DSTest {
     }
 
     struct Balances {
+        uint256 rollupEth;
         uint256 rollupToken;
         uint256 rollupZk;
+        uint256 bridgeEth;
+        uint256 bridgeToken;
         uint256 bridgeAToken;
         uint256 bridgeScaledAToken;
     }
@@ -362,8 +552,11 @@ contract AaveLendingTest is DSTest {
         address dbp = address(aaveLendingBridge);
         return
             Balances({
+                rollupEth: rp.balance,
                 rollupToken: token.balanceOf(rp),
                 rollupZk: zkToken.balanceOf(rp),
+                bridgeEth: dbp.balance,
+                bridgeToken: token.balanceOf(dbp),
                 bridgeAToken: aToken.balanceOf(dbp),
                 bridgeScaledAToken: aToken.scaledBalanceOf(dbp)
             });
@@ -456,6 +649,7 @@ contract AaveLendingTest is DSTest {
             index
         );
 
+        // TODO: We need to do some checks to ensure that the token balance is actually correct. Here we have only been looking at the other.
         assertEq(
             balanceBefore.rollupZk,
             balanceBefore.bridgeScaledAToken,
@@ -484,11 +678,121 @@ contract AaveLendingTest is DSTest {
         assertEq(
             balanceBefore.rollupToken - balanceAfter.rollupToken,
             depositAmount,
-            "Bridge token not matching"
+            "Processor token not matching"
+        );
+        assertEq(
+            balanceBefore.bridgeToken,
+            0,
+            "Bridge token balance before not matching"
+        );
+        assertEq(
+            balanceAfter.bridgeToken,
+            0,
+            "Bridge token balance after not matching"
         );
     }
 
+    function _enterWithEther(uint256 amount) public {
+        IERC20 zkAToken = IERC20(
+            aaveLendingBridge.underlyingToZkAToken(address(WETH))
+        );
+
+        uint256 depositAmount = amount;
+
+        vm.deal(address(rollupProcessor), depositAmount);
+
+        Balances memory balanceBefore = _getBalances();
+
+        AztecTypes.AztecAsset memory empty;
+        AztecTypes.AztecAsset memory inputAsset = AztecTypes.AztecAsset({
+            id: 1,
+            erc20Address: address(0),
+            assetType: AztecTypes.AztecAssetType.ETH
+        });
+        AztecTypes.AztecAsset memory outputAsset = AztecTypes.AztecAsset({
+            id: 2,
+            erc20Address: address(zkAToken),
+            assetType: AztecTypes.AztecAssetType.ERC20
+        });
+
+        (
+            uint256 outputValueA,
+            uint256 outputValueB,
+            bool isAsync
+        ) = rollupProcessor.convert(
+                address(aaveLendingBridge),
+                inputAsset,
+                empty,
+                outputAsset,
+                empty,
+                depositAmount,
+                1,
+                0
+            );
+
+        Balances memory balanceAfter = _getBalances();
+
+        uint256 index = pool.getReserveNormalizedIncome(address(token));
+        uint256 scaledDiff = depositAmount.rayDiv(index);
+        uint256 expectedScaledBalanceAfter = balanceBefore.rollupZk +
+            scaledDiff;
+        uint256 expectedATokenBalanceAfter = expectedScaledBalanceAfter.rayMul(
+            index
+        );
+
+        assertEq(
+            balanceBefore.rollupZk,
+            balanceBefore.bridgeScaledAToken,
+            "Scaled balances before not matching"
+        );
+        assertEq(
+            balanceAfter.rollupZk,
+            balanceAfter.bridgeScaledAToken,
+            "Scaled balances after not matching"
+        );
+        assertEq(
+            balanceAfter.rollupZk - balanceBefore.rollupZk,
+            outputValueA,
+            "Output value and zk balance not matching"
+        );
+        assertEq(
+            balanceAfter.rollupZk - balanceBefore.rollupZk,
+            scaledDiff,
+            "Scaled balance change not matching"
+        );
+        assertEq(
+            expectedATokenBalanceAfter,
+            balanceAfter.bridgeAToken,
+            "aToken balance not matching"
+        );
+        assertEq(
+            balanceBefore.rollupEth - balanceAfter.rollupEth,
+            depositAmount,
+            "Processor eth not matching"
+        );
+        assertEq(
+            balanceBefore.bridgeEth,
+            0,
+            "Bridge eth balance before not matching"
+        );
+        assertEq(
+            balanceAfter.bridgeEth,
+            0,
+            "Bridge eth balance after not matching"
+        );
+    }
+
+    struct exitWithTokenParams {
+        uint256 index;
+        uint256 innerATokenWithdraw;
+        uint256 innerScaledChange;
+        uint256 expectedScaledBalanceAfter;
+        uint256 expectedATokenBalanceAfter;
+    }
+
     function _exitWithToken(uint256 zkAmount) public {
+        exitWithTokenParams memory vars;
+
         IERC20 zkAToken = IERC20(
             aaveLendingBridge.underlyingToZkAToken(address(token))
         );
@@ -526,21 +830,22 @@ contract AaveLendingTest is DSTest {
 
         Balances memory balanceAfter = _getBalances();
 
-        uint256 index = pool.getReserveNormalizedIncome(address(token));
-        uint256 innerATokenWithdraw = withdrawAmount.rayMul(index);
-        uint256 innerScaledChange = innerATokenWithdraw.rayDiv(index);
+        vars.index = pool.getReserveNormalizedIncome(address(token));
+        vars.innerATokenWithdraw = withdrawAmount.rayMul(vars.index);
+        vars.innerScaledChange = vars.innerATokenWithdraw.rayDiv(vars.index);
 
-        // This will fail if the zkAmount > balance of zkATokens
-        assertEq(withdrawAmount, innerScaledChange, "Inner not matching");
-
-        uint256 expectedScaledBalanceAfter = balanceBefore.rollupZk -
+        vars.expectedScaledBalanceAfter =
+            balanceBefore.rollupZk -
             withdrawAmount;
-        uint256 expectedATokenBalanceAfter = expectedScaledBalanceAfter.rayMul(
-            index
-        );
+
+        vars.expectedATokenBalanceAfter = vars
+            .expectedScaledBalanceAfter
+            .rayMul(vars.index);
+
+        assertEq(withdrawAmount, vars.innerScaledChange, "Inner not matching");
 
         assertEq(
-            innerATokenWithdraw,
+            vars.innerATokenWithdraw,
             outputValueA,
             "Output token does not match expected output"
         );
@@ -556,7 +861,7 @@ contract AaveLendingTest is DSTest {
         );
         assertEq(
             balanceAfter.rollupZk,
-            expectedScaledBalanceAfter,
+            vars.expectedScaledBalanceAfter,
             "Scaled balance after not matching"
         );
         assertEq(
@@ -566,8 +871,104 @@ contract AaveLendingTest is DSTest {
         );
         assertEq(
             balanceAfter.bridgeAToken,
-            expectedATokenBalanceAfter,
+            vars.expectedATokenBalanceAfter,
             "Bridge aToken balance don't match expected"
+        );
+        assertEq(
+            balanceAfter.rollupToken,
+            balanceBefore.rollupToken + vars.innerATokenWithdraw,
+            "Rollup token balance don't match expected"
+        );
+    }
+
+    function _exitWithEther(uint256 zkAmount) public {
+        exitWithTokenParams memory vars;
+
+        IERC20 zkAToken = IERC20(
+            aaveLendingBridge.underlyingToZkAToken(address(token))
+        );
+
+        uint256 withdrawAmount = zkAmount;
+
+        Balances memory balanceBefore = _getBalances();
+
+        AztecTypes.AztecAsset memory empty;
+        AztecTypes.AztecAsset memory inputAsset = AztecTypes.AztecAsset({
+            id: 2,
+            erc20Address: address(zkAToken),
+            assetType: AztecTypes.AztecAssetType.ERC20
+        });
+        AztecTypes.AztecAsset memory outputAsset = AztecTypes.AztecAsset({
+            id: 1,
+            erc20Address: address(0),
+            assetType: AztecTypes.AztecAssetType.ETH
+        });
+
+        (
+            uint256 outputValueA,
+            uint256 outputValueB,
+            bool isAsync
+        ) = rollupProcessor.convert(
+                address(aaveLendingBridge),
+                inputAsset,
+                empty,
+                outputAsset,
+                empty,
+                withdrawAmount,
+                2,
+                0
+            );
+
+        Balances memory balanceAfter = _getBalances();
+
+        vars.index = pool.getReserveNormalizedIncome(address(token));
+        vars.innerATokenWithdraw = withdrawAmount.rayMul(vars.index);
+        vars.innerScaledChange = vars.innerATokenWithdraw.rayDiv(vars.index);
+
+        vars.expectedScaledBalanceAfter =
+            balanceBefore.rollupZk -
+            withdrawAmount;
+
+        vars.expectedATokenBalanceAfter = vars
+            .expectedScaledBalanceAfter
+            .rayMul(vars.index);
+
+        assertEq(withdrawAmount, vars.innerScaledChange, "Inner not matching");
+
+        assertEq(
+            vars.innerATokenWithdraw,
+            outputValueA,
+            "Output token does not match expected output"
+        );
+        assertEq(
+            balanceBefore.rollupZk,
+            balanceBefore.bridgeScaledAToken,
+            "Scaled balance before not matching"
+        );
+        assertEq(
+            balanceAfter.rollupZk,
+            balanceAfter.bridgeScaledAToken,
+            "Scaled balance after not matching"
+        );
+        assertEq(
+            balanceAfter.rollupZk,
+            vars.expectedScaledBalanceAfter,
+            "Scaled balance after not matching"
+        );
+        assertEq(
+            balanceBefore.rollupZk - balanceAfter.rollupZk,
+            withdrawAmount,
+            "Change in zk balance is equal to deposit amount"
+        );
+        assertEq(
+            balanceAfter.bridgeAToken,
+            vars.expectedATokenBalanceAfter,
+            "Bridge aToken balance don't match expected"
+        );
+        assertEq(
+            balanceAfter.rollupEth,
+            balanceBefore.rollupEth + vars.innerATokenWithdraw,
+            "Rollup eth balance don't match expected"
         );
     }
 
@@ -577,5 +978,13 @@ contract AaveLendingTest is DSTest {
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;
+    }
+
+    function cut(
+        uint256 a,
+        uint256 maxVal,
+        uint256 minVal
+    ) internal pure returns (uint256) {
+        return max(min(a, maxVal), minVal);
     }
 }

@@ -7,5 +7,7 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 interface IAccountingToken is IERC20Metadata {
     function burn(uint256 amount) external;
 
+    function burn(address from, uint256 amount) external;
+
     function mint(address to, uint256 amount) external;
 }

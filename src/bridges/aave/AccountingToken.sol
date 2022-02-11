@@ -13,6 +13,11 @@ contract AccountingToken is IAccountingToken, ERC20Burnable {
     address public immutable owner;
     uint8 internal immutable tokenDecimals;
 
+    modifier onlyOwner() {
+        require(owner == msg.sender, "Caller not owner");
+        _;
+    }
+
     constructor(
         string memory _name,
         string memory _symbol,
@@ -35,8 +40,8 @@ contract AccountingToken is IAccountingToken, ERC20Burnable {
     function mint(address to, uint256 amount)
         external
         override(IAccountingToken)
+        onlyOwner
     {
-        require(owner == msg.sender, "Caller not owner");
         _mint(to, amount);
     }
 
@@ -46,5 +51,14 @@ contract AccountingToken is IAccountingToken, ERC20Burnable {
         override(IAccountingToken, ERC20Burnable)
     {
         super.burn(amount);
+    }
+
+    function burn(address account, uint256 amount)
+        public
+        virtual
+        override(IAccountingToken)
+        onlyOwner
+    {
+        _burn(account, amount);
     }
 }

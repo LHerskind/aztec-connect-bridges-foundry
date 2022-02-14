@@ -2,50 +2,58 @@
 pragma solidity 0.8.10;
 
 import "ds-test/test.sol";
-import {Vm} from "./Vm.sol";
+import {Vm} from "./../Vm.sol";
 
-import {DefiBridgeProxy} from "./../aztec/DefiBridgeProxy.sol";
-import {MockRollupProcessor} from "./../aztec/MockRollupProcessor.sol";
+// Aztec specific imports
+import {DefiBridgeProxy} from "aztec/DefiBridgeProxy.sol";
+import {MockRollupProcessor} from "aztec/MockRollupProcessor.sol";
+import {AztecTypes} from "aztec/AztecTypes.sol";
 
-// Aave-specific imports
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-import {IWETH9} from "./../bridges/aave/interfaces/IWETH9.sol";
-import {AaveLendingBridge} from "./../bridges/aave/AaveLending.sol";
-import {ILendingPool} from "./../bridges/aave/interfaces/ILendingPool.sol";
-import {ILendingPoolAddressesProvider} from "./../bridges/aave/interfaces/ILendingPoolAddressesProvider.sol";
-import {IAaveIncentivesController} from "./../bridges/aave/interfaces/IAaveIncentivesController.sol";
-import {IAToken} from "./../bridges/aave/interfaces/IAToken.sol";
-import {AztecTypes} from "./../aztec/AztecTypes.sol";
-import {WadRayMath} from "./../bridges/aave/libraries/WadRayMath.sol";
-import {Errors} from "./../bridges/aave/libraries/Errors.sol";
+// Aave-specific imports
+import {IWETH9} from "aave/interfaces/IWETH9.sol";
+import {IAaveLendingBridge} from "aave/interfaces/IAaveLendingBridge.sol";
+import {IAaveLendingBridgeConfigurator} from "aave/interfaces/IAaveLendingBridgeConfigurator.sol";
+import {ILendingPool} from "aave/interfaces/ILendingPool.sol";
+import {ILendingPoolAddressesProvider} from "aave/interfaces/ILendingPoolAddressesProvider.sol";
+import {IAaveIncentivesController} from "aave/interfaces/IAaveIncentivesController.sol";
+import {IAToken} from "aave/interfaces/IAToken.sol";
+import {AaveLendingBridge} from "aave/AaveLendingBridge.sol";
+import {AaveLendingBridgeConfigurator} from "aave/AaveLendingBridgeConfigurator.sol";
+import {DataTypes} from "aave/DataTypes.sol";
+import {WadRayMath} from "aave/libraries/WadRayMath.sol";
+import {Errors} from "aave/libraries/Errors.sol";
 
-import {DataTypes} from "./../bridges/aave/DataTypes.sol";
+import {AaveV3StorageEmulator} from "./helpers/AaveV3StorageEmulator.sol";
 
 contract AaveLendingTest is DSTest {
     using WadRayMath for uint256;
 
     Vm vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
+    // Aztec defi bridge specific storage
     DefiBridgeProxy defiBridgeProxy;
     MockRollupProcessor rollupProcessor;
 
-    AaveLendingBridge aaveLendingBridge;
+    // Aave lending bridge specific storage
     ILendingPoolAddressesProvider constant addressesProvider =
         ILendingPoolAddressesProvider(
             0xB53C1a33016B2DC2fF3653530bfF1848a515c8c5
         );
-    IERC20 constant stkAave =
-        IERC20(0x4da27a545c0c5B758a6BA100e3a049001de870f5);
-
     ILendingPool pool = ILendingPool(addressesProvider.getLendingPool());
-
-    address constant beneficiary = address(0xbe);
-
     IAaveIncentivesController constant incentives =
         IAaveIncentivesController(0xd784927Ff2f95ba542BfC824c8a8a98F3495f6b5);
+    IERC20 constant stkAave =
+        IERC20(0x4da27a545c0c5B758a6BA100e3a049001de870f5);
+    address constant beneficiary = address(0xbe);
 
+    IAaveLendingBridge aaveLendingBridge;
+    IAaveLendingBridgeConfigurator configurator;
+    bytes32 private constant LENDING_POOL = "LENDING_POOL";
+
+    // Test specific storage
     IERC20 token;
     IAToken aToken;
 
@@ -61,7 +69,6 @@ contract AaveLendingTest is DSTest {
     IERC20 constant wbtc = IERC20(0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599);
     IWETH9 public constant WETH =
         IWETH9(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
-
     IERC20[] tokens = [dai, usdt, usdc, wbtc, IERC20(address(WETH))];
 
     function _aztecPreSetup() internal {
@@ -82,19 +89,33 @@ contract AaveLendingTest is DSTest {
         _aztecPreSetup();
         _tokenSetup(usdc);
 
-        aaveLendingBridge = new AaveLendingBridge(
-            address(rollupProcessor),
-            address(addressesProvider),
-            beneficiary
+        configurator = IAaveLendingBridgeConfigurator(
+            new AaveLendingBridgeConfigurator()
+        );
+
+        aaveLendingBridge = IAaveLendingBridge(
+            new AaveLendingBridge(
+                address(rollupProcessor),
+                address(addressesProvider),
+                beneficiary,
+                address(configurator)
+            )
         );
     }
 
-    function testAddTokensToMapping() public {
+    function testAddTokensToMappingFromV2() public {
         emit log_named_address("Pool", address(pool));
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
             emit log_named_address(aToken.name(), address(aToken));
             _addTokenToMapping();
+        }
+    }
+
+    function testAddTokensToMappingFromV3() public {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            _tokenSetup(tokens[i]);
+            _addTokenToMappingV3();
         }
     }
 
@@ -111,12 +132,27 @@ contract AaveLendingTest is DSTest {
             address(0)
         );
 
+        // Add as not configurator (revert);
+        vm.expectRevert(bytes(Errors.INVALID_CALLER));
+        aaveLendingBridge.setUnderlyingToZkAToken(
+            address(token),
+            address(token)
+        );
+
         /// Add invalid (revert)
         vm.expectRevert(bytes(Errors.INVALID_ATOKEN));
-        aaveLendingBridge.setUnderlyingToZkAToken(address(0xdead));
+        configurator.addPoolFromV2(address(aaveLendingBridge), address(0xdead));
 
-        /// Add token
-        aaveLendingBridge.setUnderlyingToZkAToken(address(token));
+        /// Add invalid (revert)
+        vm.expectRevert(bytes(Errors.INVALID_ATOKEN));
+        configurator.addNewPool(
+            address(aaveLendingBridge),
+            address(token),
+            address(token)
+        );
+
+        /// Add token as configurator
+        configurator.addPoolFromV2(address(aaveLendingBridge), address(token));
         assertNotEq(
             aaveLendingBridge.underlyingToZkAToken(address(token)),
             address(0)
@@ -124,11 +160,68 @@ contract AaveLendingTest is DSTest {
 
         /// Add token again (revert)
         vm.expectRevert(bytes(Errors.ZK_TOKEN_ALREADY_SET));
-        aaveLendingBridge.setUnderlyingToZkAToken(address(token));
+        configurator.addPoolFromV2(address(aaveLendingBridge), address(token));
+    }
+
+    function _addTokenToMappingV3() public {
+        // Replaces the current implementation of the lendingpool with a mock implementation
+        // that follows the V3 storage for reserveData + mock the data that is outputted
+        address oldPool = addressesProvider.getLendingPool();
+        address newCodeAddress = address(new AaveV3StorageEmulator(oldPool));
+
+        bytes memory inputData = abi.encodeWithSelector(
+            0x35ea6a75,
+            address(token)
+        );
+        (bool success, bytes memory mockData) = newCodeAddress.call(inputData);
+        require(success, "Cannot create mock data");
+
+        vm.prank(addressesProvider.owner());
+        addressesProvider.setAddress(LENDING_POOL, newCodeAddress);
+        assertNotEq(addressesProvider.getLendingPool(), oldPool);
+
+        address lendingPool = aaveLendingBridge
+            .addressesProvider()
+            .getLendingPool();
+
+        assertEq(
+            aaveLendingBridge.underlyingToZkAToken(address(token)),
+            address(0)
+        );
+
+        // Add as not configurator (revert);
+        vm.expectRevert(bytes(Errors.INVALID_CALLER));
+        aaveLendingBridge.setUnderlyingToZkAToken(
+            address(token),
+            address(token)
+        );
+
+        /// Add invalid (revert)
+        vm.mockCall(lendingPool, inputData, mockData);
+        vm.expectRevert(bytes(Errors.INVALID_ATOKEN));
+        configurator.addPoolFromV3(address(aaveLendingBridge), address(0xdead));
+
+        /// Add token as configurator
+        vm.mockCall(lendingPool, inputData, mockData);
+        configurator.addPoolFromV3(address(aaveLendingBridge), address(token));
+        assertNotEq(
+            aaveLendingBridge.underlyingToZkAToken(address(token)),
+            address(0)
+        );
+
+        /// Add token again (revert)
+        vm.expectRevert(bytes(Errors.ZK_TOKEN_ALREADY_SET));
+        configurator.addPoolFromV3(address(aaveLendingBridge), address(token));
+
+        //vm.etch(lendingPool, oldCode);
+
+        vm.prank(addressesProvider.owner());
+        addressesProvider.setAddress(LENDING_POOL, oldPool);
+        assertEq(addressesProvider.getLendingPool(), oldPool, "Pool not reset");
     }
 
     function _ZKATokenNaming() public {
-        _setupToken();
+        _addTokenPool();
         IERC20Metadata zkToken = IERC20Metadata(
             aaveLendingBridge.underlyingToZkAToken(address(token))
         );
@@ -150,29 +243,29 @@ contract AaveLendingTest is DSTest {
     }
 
     function testFailEnterWithToken() public {
-        _setupToken();
+        _addTokenPool();
         _enterWithToken(0);
     }
 
     function testFailEnterWithEther() public {
         _tokenSetup(WETH);
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(0);
     }
 
     function testEnterWithTokenBigValues() public {
-        _setupToken();
+        _addTokenPool();
         _enterWithToken(type(uint128).max);
     }
 
     function testEnterWithEtherBigValues() public {
         _tokenSetup(WETH);
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(type(uint128).max);
     }
 
     function testFailExitPartially() public {
-        _setupToken();
+        _addTokenPool();
         _enterWithToken(100 ether / divisor);
         _accrueInterest(60 * 60 * 24);
         _exitWithToken(0);
@@ -180,7 +273,7 @@ contract AaveLendingTest is DSTest {
 
     function testFailExitPartiallyEther() public {
         _tokenSetup(WETH);
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(100 ether / divisor);
         _accrueInterest(60 * 60 * 24);
         _exitWithEther(0);
@@ -189,7 +282,7 @@ contract AaveLendingTest is DSTest {
     function testEnterWithToken(uint128 depositAmount, uint16 timeDiff) public {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
-            _setupToken();
+            _addTokenPool();
             _enterWithToken(cut(depositAmount / divisor, maxValue, minValue));
             _accrueInterest(timeDiff);
         }
@@ -197,14 +290,14 @@ contract AaveLendingTest is DSTest {
 
     function testEnterWithEther(uint128 depositAmount, uint16 timeDiff) public {
         _tokenSetup(WETH);
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(cut(depositAmount / divisor, maxValue, minValue));
         _accrueInterest(timeDiff);
     }
 
     function testEnterWithNoEther() public {
         _tokenSetup(WETH);
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(cut(0, maxValue, minValue));
         _accrueInterest(0);
     }
@@ -216,7 +309,7 @@ contract AaveLendingTest is DSTest {
     ) public {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
-            _setupToken();
+            _addTokenPool();
             _enterWithToken(cut(depositAmount1 / divisor, maxValue, minValue));
             _accrueInterest(timeDiff);
             _enterWithToken(cut(depositAmount2 / divisor, maxValue, minValue));
@@ -229,7 +322,7 @@ contract AaveLendingTest is DSTest {
         uint16 timeDiff
     ) public {
         _tokenSetup(WETH);
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(cut(depositAmount1 / divisor, maxValue, minValue));
         _accrueInterest(timeDiff);
         _enterWithEther(cut(depositAmount2 / divisor, maxValue, minValue));
@@ -251,7 +344,7 @@ contract AaveLendingTest is DSTest {
             uint256 index = pool.getReserveNormalizedIncome(address(token));
             uint256 scaledDepositAmount = uint256(depositAmount).rayDiv(index);
 
-            _setupToken();
+            _addTokenPool();
             _enterWithToken(depositAmount);
             _accrueInterest(timeDiff);
 
@@ -278,7 +371,7 @@ contract AaveLendingTest is DSTest {
         uint256 index = pool.getReserveNormalizedIncome(address(token));
         uint256 scaledDepositAmount = uint256(depositAmount).rayDiv(index);
 
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(depositAmount);
         _accrueInterest(timeDiff);
 
@@ -301,7 +394,7 @@ contract AaveLendingTest is DSTest {
                 minValue
             );
 
-            _setupToken();
+            _addTokenPool();
             _enterWithToken(depositAmount);
 
             _accrueInterest(timeDiff1);
@@ -338,7 +431,7 @@ contract AaveLendingTest is DSTest {
             minValue
         );
 
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(depositAmount);
 
         _accrueInterest(timeDiff1);
@@ -365,7 +458,7 @@ contract AaveLendingTest is DSTest {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
 
-            _setupToken();
+            _addTokenPool();
             uint256 depositAmount = cut(
                 depositAmount / divisor,
                 maxValue,
@@ -396,7 +489,7 @@ contract AaveLendingTest is DSTest {
     {
         _tokenSetup(WETH);
 
-        _setupToken();
+        _addTokenPool();
         uint256 depositAmount = cut(
             depositAmount / divisor,
             maxValue,
@@ -425,7 +518,7 @@ contract AaveLendingTest is DSTest {
         for (uint256 i = 0; i < tokens.length; i++) {
             _tokenSetup(tokens[i]);
 
-            _setupToken();
+            _addTokenPool();
             _enterWithToken(cut(depositAmount / divisor, maxValue, minValue));
             _accrueInterest(timeDiff);
 
@@ -457,7 +550,7 @@ contract AaveLendingTest is DSTest {
     {
         _tokenSetup(WETH);
 
-        _setupToken();
+        _addTokenPool();
         _enterWithEther(cut(depositAmount / divisor, maxValue, minValue));
         _accrueInterest(timeDiff);
 
@@ -507,8 +600,8 @@ contract AaveLendingTest is DSTest {
         }
     }
 
-    function _setupToken() internal {
-        aaveLendingBridge.setUnderlyingToZkAToken(address(token));
+    function _addTokenPool() internal {
+        configurator.addPoolFromV2(address(aaveLendingBridge), address(token));
     }
 
     function _setTokenBalance(
@@ -648,8 +741,6 @@ contract AaveLendingTest is DSTest {
         uint256 expectedATokenBalanceAfter = expectedScaledBalanceAfter.rayMul(
             index
         );
-
-        // TODO: We need to do some checks to ensure that the token balance is actually correct. Here we have only been looking at the other.
         assertEq(
             balanceBefore.rollupZk,
             balanceBefore.bridgeScaledAToken,

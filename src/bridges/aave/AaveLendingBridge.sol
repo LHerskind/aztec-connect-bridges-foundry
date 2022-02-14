@@ -13,6 +13,7 @@ import {IRollupProcessor} from "../../interfaces/IRollupProcessor.sol";
 import {IDefiBridge} from "../../interfaces/IDefiBridge.sol";
 import {ILendingPoolAddressesProvider} from "./interfaces/ILendingPoolAddressesProvider.sol";
 import {ILendingPool} from "./interfaces/ILendingPool.sol";
+import {IAaveLendingBridge} from "./interfaces/IAaveLendingBridge.sol";
 import {IPool} from "./interfaces/IPool.sol";
 import {IScaledBalanceToken} from "./interfaces/IScaledBalanceToken.sol";
 import {IAaveIncentivesController} from "./interfaces/IAaveIncentivesController.sol";
@@ -27,7 +28,7 @@ import {WadRayMath} from "./libraries/WadRayMath.sol";
 import {DataTypes} from "./DataTypes.sol";
 import {Errors} from "./libraries/Errors.sol";
 
-contract AaveLendingBridge is IDefiBridge {
+contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
     using SafeMath for uint256;
     using WadRayMath for uint256;
     using SafeERC20 for IERC20;
@@ -38,22 +39,30 @@ contract AaveLendingBridge is IDefiBridge {
     address public immutable rollupProcessor;
     ILendingPoolAddressesProvider public immutable addressesProvider;
     address public immutable rewardsBeneficiary;
+    address public immutable configurator;
 
     /// Mapping underlying assets to the zk atoken used for accounting
     mapping(address => address) public underlyingToZkAToken;
     mapping(address => address) public underlyingToAToken;
+
+    modifier onlyConfigurator() {
+        require(msg.sender == configurator, Errors.INVALID_CALLER);
+        _;
+    }
 
     receive() external payable {}
 
     constructor(
         address _rollupProcessor,
         address _addressesProvider,
-        address _rewardsBeneficiary
+        address _rewardsBeneficiary,
+        address _configurator
     ) public {
         rollupProcessor = _rollupProcessor;
         /// @dev addressesProvider is used to fetch pool, used in case Aave governance update pool proxy
         addressesProvider = ILendingPoolAddressesProvider(_addressesProvider);
         rewardsBeneficiary = _rewardsBeneficiary;
+        configurator = _configurator;
     }
 
     /**
@@ -61,20 +70,18 @@ contract AaveLendingBridge is IDefiBridge {
      * @dev For the underlying to be accepted, the asset must be supported in Aave
      * @dev Underlying assets that already is supported cannot be added again.
      */
-    function setUnderlyingToZkAToken(address underlyingAsset) external {
+    function setUnderlyingToZkAToken(
+        address underlyingAsset,
+        address aTokenAddress
+    ) external onlyConfigurator {
         require(
             underlyingToZkAToken[underlyingAsset] == address(0),
             Errors.ZK_TOKEN_ALREADY_SET
         );
+        require(aTokenAddress != address(0), Errors.INVALID_ATOKEN);
+        require(aTokenAddress != underlyingAsset, Errors.INVALID_ATOKEN);
 
-        ILendingPool pool = ILendingPool(addressesProvider.getLendingPool());
-
-        // TODO: Issue, this is not compatible with Aave V3 return value.
-        IERC20Metadata aToken = IERC20Metadata(
-            pool.getReserveData(underlyingAsset).aTokenAddress
-        );
-
-        require(address(aToken) != address(0), Errors.INVALID_ATOKEN);
+        IERC20Metadata aToken = IERC20Metadata(aTokenAddress);
 
         string memory name = string(abi.encodePacked("ZK-", aToken.name()));
         string memory symbol = string(abi.encodePacked("ZK-", aToken.symbol()));
@@ -94,7 +101,7 @@ contract AaveLendingBridge is IDefiBridge {
         AztecTypes.AztecAsset memory outputAssetA,
         AztecTypes.AztecAsset memory outputAssetB
     )
-        public
+        internal
         view
         returns (
             address inputAsset,
@@ -152,7 +159,7 @@ contract AaveLendingBridge is IDefiBridge {
     )
         external
         payable
-        override
+        override(IDefiBridge)
         returns (
             uint256 outputValueA,
             uint256 outputValueB,

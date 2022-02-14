@@ -20,7 +20,7 @@ import {IAaveIncentivesController} from "./interfaces/IAaveIncentivesController.
 import {IAccountingToken} from "./interfaces/IAccountingToken.sol";
 import {IWETH9} from "./interfaces/IWETH9.sol";
 
-import {AztecTypes} from "../../aztec/AztecTypes.sol";
+import {AztecTypes} from "aztec/AztecTypes.sol";
 
 import {AccountingToken} from "./AccountingToken.sol";
 import {WadRayMath} from "./libraries/WadRayMath.sol";
@@ -36,17 +36,17 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
     IWETH9 public constant WETH =
         IWETH9(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
-    address public immutable rollupProcessor;
-    ILendingPoolAddressesProvider public immutable addressesProvider;
-    address public immutable rewardsBeneficiary;
-    address public immutable configurator;
+    address public immutable ROLLUP_PROCESSOR;
+    ILendingPoolAddressesProvider public immutable ADDRESSES_PROVIDER;
+    address public immutable REWARDS_BENEFICIARY;
+    address public immutable CONFIGURATOR;
 
     /// Mapping underlying assets to the zk atoken used for accounting
     mapping(address => address) public underlyingToZkAToken;
     mapping(address => address) public underlyingToAToken;
 
     modifier onlyConfigurator() {
-        require(msg.sender == configurator, Errors.INVALID_CALLER);
+        require(msg.sender == CONFIGURATOR, Errors.INVALID_CALLER);
         _;
     }
 
@@ -58,11 +58,11 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
         address _rewardsBeneficiary,
         address _configurator
     ) public {
-        rollupProcessor = _rollupProcessor;
+        ROLLUP_PROCESSOR = _rollupProcessor;
         /// @dev addressesProvider is used to fetch pool, used in case Aave governance update pool proxy
-        addressesProvider = ILendingPoolAddressesProvider(_addressesProvider);
-        rewardsBeneficiary = _rewardsBeneficiary;
-        configurator = _configurator;
+        ADDRESSES_PROVIDER = ILendingPoolAddressesProvider(_addressesProvider);
+        REWARDS_BENEFICIARY = _rewardsBeneficiary;
+        CONFIGURATOR = _configurator;
     }
 
     /**
@@ -109,7 +109,7 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
             bool isEth
         )
     {
-        require(msg.sender == rollupProcessor, Errors.INVALID_CALLER);
+        require(msg.sender == ROLLUP_PROCESSOR, Errors.INVALID_CALLER);
         require(
             !(inputAssetA.assetType == AztecTypes.AztecAssetType.ETH &&
                 outputAssetA.assetType == AztecTypes.AztecAssetType.ETH),
@@ -206,7 +206,7 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
         if (isEth) {
             WETH.deposit{value: amount}();
         }
-        ILendingPool pool = ILendingPool(addressesProvider.getLendingPool());
+        ILendingPool pool = ILendingPool(ADDRESSES_PROVIDER.getLendingPool());
 
         IScaledBalanceToken aToken = IScaledBalanceToken(
             underlyingToAToken[underlyingAsset]
@@ -232,7 +232,7 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
         zkAToken.mint(address(this), diff);
 
         // 5. Approve processor to pull zk aTokens.
-        zkAToken.approve(rollupProcessor, diff);
+        zkAToken.approve(ROLLUP_PROCESSOR, diff);
         return diff;
     }
 
@@ -248,7 +248,7 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
         uint256 interactionNonce,
         bool isEth
     ) internal returns (uint256) {
-        ILendingPool pool = ILendingPool(addressesProvider.getLendingPool());
+        ILendingPool pool = ILendingPool(ADDRESSES_PROVIDER.getLendingPool());
 
         // 1. Compute the amount from the scaledAmount supplied
         uint256 underlyingAmount = scaledAmount.rayMul(
@@ -269,13 +269,13 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
 
         if (isEth) {
             WETH.withdraw(outputValue);
-            IRollupProcessor(rollupProcessor).receiveEthFromBridge{
+            IRollupProcessor(ROLLUP_PROCESSOR).receiveEthFromBridge{
                 value: outputValue
             }(interactionNonce);
         } else {
             // 4. Approve rollup to spend underlying
             IERC20(underlyingAsset).safeIncreaseAllowance(
-                rollupProcessor,
+                ROLLUP_PROCESSOR,
                 outputValue
             );
         }
@@ -319,7 +319,7 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
             controller.claimRewards(
                 assets,
                 type(uint256).max,
-                rewardsBeneficiary
+                REWARDS_BENEFICIARY
             );
     }
 }

@@ -31,7 +31,7 @@ contract AaveLendingBridgeConfigurator is
     {
         IAaveLendingBridge bridge = IAaveLendingBridge(lendingBridge);
         ILendingPool pool = ILendingPool(
-            bridge.addressesProvider().getLendingPool()
+            bridge.ADDRESSES_PROVIDER().getLendingPool()
         );
 
         address aTokenAddress = pool
@@ -47,7 +47,7 @@ contract AaveLendingBridgeConfigurator is
         onlyOwner
     {
         IAaveLendingBridge bridge = IAaveLendingBridge(lendingBridge);
-        IPool pool = IPool(bridge.addressesProvider().getLendingPool());
+        IPool pool = IPool(bridge.ADDRESSES_PROVIDER().getLendingPool());
 
         address aTokenAddress = pool
             .getReserveData(underlyingAsset)

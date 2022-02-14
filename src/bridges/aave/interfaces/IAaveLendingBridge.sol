@@ -15,16 +15,16 @@ interface IAaveLendingBridge {
         address[] calldata assets
     ) external returns (uint256);
 
-    function rollupProcessor() external view returns (address);
+    function ROLLUP_PROCESSOR() external view returns (address);
 
-    function addressesProvider()
+    function ADDRESSES_PROVIDER()
         external
         view
         returns (ILendingPoolAddressesProvider);
 
-    function rewardsBeneficiary() external view returns (address);
+    function REWARDS_BENEFICIARY() external view returns (address);
 
-    function configurator() external view returns (address);
+    function CONFIGURATOR() external view returns (address);
 
     /// Mapping underlying assets to the zk atoken used for accounting
     function underlyingToZkAToken(address underlyingAsset)

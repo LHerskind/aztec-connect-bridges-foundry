@@ -244,6 +244,7 @@ contract AaveLendingTest is DSTest {
     }
 
     function testFailEnterWithToken() public {
+        _tokenSetup(DAI);
         _addTokenPool();
         _enterWithToken(0);
     }
@@ -255,17 +256,21 @@ contract AaveLendingTest is DSTest {
     }
 
     function testEnterWithTokenBigValues() public {
-        _addTokenPool();
-        _enterWithToken(type(uint128).max);
+        for (uint256 i = 0; i < tokens.length; i++) {
+            _tokenSetup(tokens[i]);
+            _addTokenPool();
+            _enterWithToken(cut(type(uint128).max, maxValue, minValue));
+        }
     }
 
     function testEnterWithEtherBigValues() public {
         _tokenSetup(WETH);
         _addTokenPool();
-        _enterWithEther(type(uint128).max);
+        _enterWithEther(cut(type(uint128).max, maxValue, minValue));
     }
 
     function testFailExitPartially() public {
+        _tokenSetup(DAI);
         _addTokenPool();
         _enterWithToken(100 ether / divisor);
         _accrueInterest(60 * 60 * 24);
@@ -515,8 +520,11 @@ contract AaveLendingTest is DSTest {
         assertEq(balancesAfter.rollupZk, 0, "Not exited with everything");
     }
 
-    function testClaimRewards(uint128 depositAmount, uint16 timeDiff) public {
+    function testClaimRewardsTokens(uint128 depositAmount, uint16 timeDiff)
+        public
+    {
         for (uint256 i = 0; i < tokens.length; i++) {
+            emit log_named_address("Testing with", address(tokens[i]));
             _tokenSetup(tokens[i]);
 
             _addTokenPool();
@@ -526,21 +534,24 @@ contract AaveLendingTest is DSTest {
             address[] memory assets = new address[](1);
             assets[0] = address(aToken);
 
-            assertEq(
-                STK_AAVE.balanceOf(address(aaveLendingBridge)),
-                0,
-                "Already have reward tokens"
+            uint256 beneficiaryCurrentStakedAaveBalance = STK_AAVE.balanceOf(
+                BENEFICIARY
             );
-
             uint256 expectedRewards = aaveLendingBridge.claimLiquidityRewards(
                 address(INCENTIVES),
                 assets
             );
+            assertEq(
+                STK_AAVE.balanceOf(address(aaveLendingBridge)),
+                0,
+                "The bridge received the rewards"
+            );
 
             // The claiming of liquidity rewards is not always returning the actual value increase
+
             assertCloseTo(
-                STK_AAVE.balanceOf(address(aaveLendingBridge)),
-                expectedRewards,
+                STK_AAVE.balanceOf(BENEFICIARY),
+                expectedRewards + beneficiaryCurrentStakedAaveBalance,
                 2
             );
         }
@@ -550,7 +561,6 @@ contract AaveLendingTest is DSTest {
         public
     {
         _tokenSetup(WETH);
-
         _addTokenPool();
         _enterWithEther(cut(depositAmount / divisor, maxValue, minValue));
         _accrueInterest(timeDiff);
@@ -558,21 +568,23 @@ contract AaveLendingTest is DSTest {
         address[] memory assets = new address[](1);
         assets[0] = address(aToken);
 
-        assertEq(
-            STK_AAVE.balanceOf(address(aaveLendingBridge)),
-            0,
-            "Already have reward tokens"
+        uint256 beneficiaryCurrentStakedAaveBalance = STK_AAVE.balanceOf(
+            address(BENEFICIARY)
         );
-
         uint256 expectedRewards = aaveLendingBridge.claimLiquidityRewards(
             address(INCENTIVES),
             assets
         );
+        assertEq(
+            STK_AAVE.balanceOf(address(aaveLendingBridge)),
+            0,
+            "The bridge received the rewards"
+        );
 
         // The claiming of liquidity rewards is not always returning the actual value increase
         assertCloseTo(
-            STK_AAVE.balanceOf(address(aaveLendingBridge)),
-            expectedRewards,
+            STK_AAVE.balanceOf(BENEFICIARY),
+            expectedRewards + beneficiaryCurrentStakedAaveBalance,
             2
         );
     }
@@ -598,6 +610,7 @@ contract AaveLendingTest is DSTest {
             emit log("Error: a close to b not satisfied [uint256]");
             emit log_named_uint(" Expected", b);
             emit log_named_uint("   Actual", a);
+            fail();
         }
     }
 

@@ -8,6 +8,7 @@ import {Vm} from "./../Vm.sol";
 import {DefiBridgeProxy} from "aztec/DefiBridgeProxy.sol";
 import {MockRollupProcessor} from "aztec/MockRollupProcessor.sol";
 import {AztecTypes} from "aztec/AztecTypes.sol";
+import {IDefiBridge} from "./../../interfaces/IDefiBridge.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -125,121 +126,216 @@ contract AaveLendingTest is DSTest {
         }
     }
 
-    function _addTokenToMapping() public {
-        assertEq(
-            aaveLendingBridge.underlyingToZkAToken(address(token)),
-            address(0)
-        );
+    function testSanityConvert() public {
+        _tokenSetup(WETH);
+        AztecTypes.AztecAsset memory emptyAsset = AztecTypes.AztecAsset({
+            id: 0,
+            erc20Address: address(0),
+            assetType: AztecTypes.AztecAssetType.NOT_USED
+        });
+        AztecTypes.AztecAsset memory ethAsset = AztecTypes.AztecAsset({
+            id: 1,
+            erc20Address: address(0),
+            assetType: AztecTypes.AztecAssetType.ETH
+        });
+        AztecTypes.AztecAsset memory daiAsset = AztecTypes.AztecAsset({
+            id: 2,
+            erc20Address: address(DAI),
+            assetType: AztecTypes.AztecAssetType.ERC20
+        });
+        AztecTypes.AztecAsset memory virtualAsset = AztecTypes.AztecAsset({
+            id: 3,
+            erc20Address: address(0xda),
+            assetType: AztecTypes.AztecAssetType.VIRTUAL
+        });
 
-        // Add as not configurator (revert);
+        // validate caller
+        // Wrong input token types.
+        // double eth
+        // zkATokenAddress == 0
+        // same asset for both input and output
+
+        // Invalid caller //
         VM.expectRevert(bytes(Errors.INVALID_CALLER));
-        aaveLendingBridge.setUnderlyingToZkAToken(
-            address(token),
-            address(token)
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            emptyAsset,
+            emptyAsset,
+            emptyAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
 
-        /// Add invalid (revert)
-        VM.expectRevert(bytes(Errors.INVALID_ATOKEN));
-        configurator.addPoolFromV2(address(aaveLendingBridge), address(0xdead));
+        VM.startPrank(address(rollupProcessor));
 
-        /// Add invalid (revert)
-        VM.expectRevert(bytes(Errors.INVALID_ATOKEN));
-        configurator.addNewPool(
-            address(aaveLendingBridge),
-            address(token),
-            address(token)
+        // Eth as input and output //
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_A_AND_OUTPUT_ASSET_A_IS_ETH));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            ethAsset,
+            emptyAsset,
+            ethAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
 
-        /// Add token as configurator
-        configurator.addPoolFromV2(address(aaveLendingBridge), address(token));
-        assertNotEq(
-            aaveLendingBridge.underlyingToZkAToken(address(token)),
-            address(0)
+        // Input asset empty
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_A_NOT_ERC20_OR_ETH));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            emptyAsset,
+            emptyAsset,
+            emptyAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
 
-        /// Add token again (revert)
-        VM.expectRevert(bytes(Errors.ZK_TOKEN_ALREADY_SET));
-        configurator.addPoolFromV2(address(aaveLendingBridge), address(token));
-    }
-
-    function _addTokenToMappingV3() public {
-        // Replaces the current implementation of the lendingpool with a mock implementation
-        // that follows the V3 storage for reserveData + mock the data that is outputted
-        address oldPool = ADDRESSES_PROVIDER.getLendingPool();
-        address newCodeAddress = address(new AaveV3StorageEmulator(oldPool));
-
-        bytes memory inputData = abi.encodeWithSelector(
-            0x35ea6a75,
-            address(token)
-        );
-        (bool success, bytes memory mockData) = newCodeAddress.call(inputData);
-        require(success, "Cannot create mock data");
-
-        VM.prank(ADDRESSES_PROVIDER.owner());
-        ADDRESSES_PROVIDER.setAddress(LENDING_POOL, newCodeAddress);
-        assertNotEq(ADDRESSES_PROVIDER.getLendingPool(), oldPool);
-
-        address lendingPool = aaveLendingBridge
-            .ADDRESSES_PROVIDER()
-            .getLendingPool();
-
-        assertEq(
-            aaveLendingBridge.underlyingToZkAToken(address(token)),
-            address(0)
+        // Input asset virtual
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_A_NOT_ERC20_OR_ETH));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            virtualAsset,
+            emptyAsset,
+            emptyAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
 
-        // Add as not configurator (revert);
-        VM.expectRevert(bytes(Errors.INVALID_CALLER));
-        aaveLendingBridge.setUnderlyingToZkAToken(
-            address(token),
-            address(token)
+        // Output asset empty
+        VM.expectRevert(bytes(Errors.OUTPUT_ASSET_A_NOT_ERC20_OR_ETH));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            emptyAsset,
+            emptyAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
 
-        /// Add invalid (revert)
-        VM.mockCall(lendingPool, inputData, mockData);
-        VM.expectRevert(bytes(Errors.INVALID_ATOKEN));
-        configurator.addPoolFromV3(address(aaveLendingBridge), address(0xdead));
-
-        /// Add token as configurator
-        VM.mockCall(lendingPool, inputData, mockData);
-        configurator.addPoolFromV3(address(aaveLendingBridge), address(token));
-        assertNotEq(
-            aaveLendingBridge.underlyingToZkAToken(address(token)),
-            address(0)
+        // Output asset virtual
+        VM.expectRevert(bytes(Errors.OUTPUT_ASSET_A_NOT_ERC20_OR_ETH));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            emptyAsset,
+            virtualAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
 
-        /// Add token again (revert)
-        VM.expectRevert(bytes(Errors.ZK_TOKEN_ALREADY_SET));
-        configurator.addPoolFromV3(address(aaveLendingBridge), address(token));
-
-        VM.prank(ADDRESSES_PROVIDER.owner());
-        ADDRESSES_PROVIDER.setAddress(LENDING_POOL, oldPool);
-        assertEq(
-            ADDRESSES_PROVIDER.getLendingPool(),
-            oldPool,
-            "Pool not reset"
+        // Non empty input asset B
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_B_NOT_EMPTY));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            daiAsset,
+            ethAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
-    }
-
-    function _ZKATokenNaming() public {
-        _addTokenPool();
-        IERC20Metadata zkToken = IERC20Metadata(
-            aaveLendingBridge.underlyingToZkAToken(address(token))
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_B_NOT_EMPTY));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            virtualAsset,
+            ethAsset,
+            emptyAsset,
+            0,
+            0,
+            0
+        );
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_B_NOT_EMPTY));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            ethAsset,
+            ethAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
 
-        string memory name = string(abi.encodePacked("ZK-", aToken.name()));
-        string memory symbol = string(abi.encodePacked("ZK-", aToken.symbol()));
-
-        assertEq(
-            zkToken.symbol(),
-            symbol,
-            "The zkAToken token symbol don't match"
+        // Non empty output asset B
+        VM.expectRevert(bytes(Errors.OUTPUT_ASSET_B_NOT_EMPTY));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            emptyAsset,
+            ethAsset,
+            daiAsset,
+            0,
+            0,
+            0
         );
-        assertEq(zkToken.name(), name, "The zkAToken token name don't match");
-        assertEq(
-            zkToken.decimals(),
-            aToken.decimals(),
-            "The zkAToken token decimals don't match"
+        VM.expectRevert(bytes(Errors.OUTPUT_ASSET_B_NOT_EMPTY));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            emptyAsset,
+            ethAsset,
+            virtualAsset,
+            0,
+            0,
+            0
+        );
+        VM.expectRevert(bytes(Errors.OUTPUT_ASSET_B_NOT_EMPTY));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            emptyAsset,
+            ethAsset,
+            ethAsset,
+            0,
+            0,
+            0
+        );
+
+        // address(0) as input asset
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_INVALID));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            AztecTypes.AztecAsset({
+                id: 2,
+                erc20Address: address(0),
+                assetType: AztecTypes.AztecAssetType.ERC20
+            }),
+            emptyAsset,
+            ethAsset,
+            emptyAsset,
+            0,
+            0,
+            0
+        );
+
+        // address(0) as output asset
+        VM.expectRevert(bytes(Errors.OUTPUT_ASSET_INVALID));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            ethAsset,
+            emptyAsset,
+            AztecTypes.AztecAsset({
+                id: 2,
+                erc20Address: address(0),
+                assetType: AztecTypes.AztecAssetType.ERC20
+            }),
+            emptyAsset,
+            0,
+            0,
+            0
+        );
+
+        // Trying to enter with non-supported asset. Is assumed to be zkAtoken for exit,
+        // Will revert because zkAToken for other tokens is address 0
+        VM.expectRevert(bytes(Errors.INPUT_ASSET_NOT_EQ_ZK_ATOKEN));
+        IDefiBridge(address(aaveLendingBridge)).convert(
+            daiAsset,
+            emptyAsset,
+            ethAsset,
+            emptyAsset,
+            0,
+            0,
+            0
         );
     }
 
@@ -1076,6 +1172,124 @@ contract AaveLendingTest is DSTest {
             balanceAfter.rollupEth,
             balanceBefore.rollupEth + vars.innerATokenWithdraw,
             "Rollup eth balance don't match expected"
+        );
+    }
+
+    function _ZKATokenNaming() public {
+        _addTokenPool();
+        IERC20Metadata zkToken = IERC20Metadata(
+            aaveLendingBridge.underlyingToZkAToken(address(token))
+        );
+
+        string memory name = string(abi.encodePacked("ZK-", aToken.name()));
+        string memory symbol = string(abi.encodePacked("ZK-", aToken.symbol()));
+
+        assertEq(
+            zkToken.symbol(),
+            symbol,
+            "The zkAToken token symbol don't match"
+        );
+        assertEq(zkToken.name(), name, "The zkAToken token name don't match");
+        assertEq(
+            zkToken.decimals(),
+            aToken.decimals(),
+            "The zkAToken token decimals don't match"
+        );
+    }
+
+    function _addTokenToMapping() public {
+        assertEq(
+            aaveLendingBridge.underlyingToZkAToken(address(token)),
+            address(0)
+        );
+
+        // Add as not configurator (revert);
+        VM.expectRevert(bytes(Errors.INVALID_CALLER));
+        aaveLendingBridge.setUnderlyingToZkAToken(
+            address(token),
+            address(token)
+        );
+
+        /// Add invalid (revert)
+        VM.expectRevert(bytes(Errors.INVALID_ATOKEN));
+        configurator.addPoolFromV2(address(aaveLendingBridge), address(0xdead));
+
+        /// Add invalid (revert)
+        VM.expectRevert(bytes(Errors.INVALID_ATOKEN));
+        configurator.addNewPool(
+            address(aaveLendingBridge),
+            address(token),
+            address(token)
+        );
+
+        /// Add token as configurator
+        configurator.addPoolFromV2(address(aaveLendingBridge), address(token));
+        assertNotEq(
+            aaveLendingBridge.underlyingToZkAToken(address(token)),
+            address(0)
+        );
+
+        /// Add token again (revert)
+        VM.expectRevert(bytes(Errors.ZK_TOKEN_ALREADY_SET));
+        configurator.addPoolFromV2(address(aaveLendingBridge), address(token));
+    }
+
+    function _addTokenToMappingV3() public {
+        // Replaces the current implementation of the lendingpool with a mock implementation
+        // that follows the V3 storage for reserveData + mock the data that is outputted
+        address oldPool = ADDRESSES_PROVIDER.getLendingPool();
+        address newCodeAddress = address(new AaveV3StorageEmulator(oldPool));
+
+        bytes memory inputData = abi.encodeWithSelector(
+            0x35ea6a75,
+            address(token)
+        );
+        (bool success, bytes memory mockData) = newCodeAddress.call(inputData);
+        require(success, "Cannot create mock data");
+
+        VM.prank(ADDRESSES_PROVIDER.owner());
+        ADDRESSES_PROVIDER.setAddress(LENDING_POOL, newCodeAddress);
+        assertNotEq(ADDRESSES_PROVIDER.getLendingPool(), oldPool);
+
+        address lendingPool = aaveLendingBridge
+            .ADDRESSES_PROVIDER()
+            .getLendingPool();
+
+        assertEq(
+            aaveLendingBridge.underlyingToZkAToken(address(token)),
+            address(0)
+        );
+
+        // Add as not configurator (revert);
+        VM.expectRevert(bytes(Errors.INVALID_CALLER));
+        aaveLendingBridge.setUnderlyingToZkAToken(
+            address(token),
+            address(token)
+        );
+
+        /// Add invalid (revert)
+        VM.mockCall(lendingPool, inputData, mockData);
+        VM.expectRevert(bytes(Errors.INVALID_ATOKEN));
+        configurator.addPoolFromV3(address(aaveLendingBridge), address(0xdead));
+
+        /// Add token as configurator
+        VM.mockCall(lendingPool, inputData, mockData);
+        configurator.addPoolFromV3(address(aaveLendingBridge), address(token));
+        assertNotEq(
+            aaveLendingBridge.underlyingToZkAToken(address(token)),
+            address(0)
+        );
+
+        /// Add token again (revert)
+        VM.expectRevert(bytes(Errors.ZK_TOKEN_ALREADY_SET));
+        configurator.addPoolFromV3(address(aaveLendingBridge), address(token));
+
+        VM.prank(ADDRESSES_PROVIDER.owner());
+        ADDRESSES_PROVIDER.setAddress(LENDING_POOL, oldPool);
+        assertEq(
+            ADDRESSES_PROVIDER.getLendingPool(),
+            oldPool,
+            "Pool not reset"
         );
     }
 

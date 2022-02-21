@@ -92,62 +92,6 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
         underlyingToAToken[underlyingAsset] = address(aToken);
     }
 
-    /**
-     * @notice sanity checks from the sender and inputs to the convert function
-     */
-    function _sanityConvert(
-        AztecTypes.AztecAsset memory inputAssetA,
-        AztecTypes.AztecAsset memory inputAssetB,
-        AztecTypes.AztecAsset memory outputAssetA,
-        AztecTypes.AztecAsset memory outputAssetB
-    )
-        internal
-        view
-        returns (
-            address inputAsset,
-            address outputAsset,
-            bool isEth
-        )
-    {
-        require(msg.sender == ROLLUP_PROCESSOR, Errors.INVALID_CALLER);
-        require(
-            !(inputAssetA.assetType == AztecTypes.AztecAssetType.ETH &&
-                outputAssetA.assetType == AztecTypes.AztecAssetType.ETH),
-            "Cannot use eth as input AND output"
-        );
-        require(
-            inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 ||
-                inputAssetA.assetType == AztecTypes.AztecAssetType.ETH,
-            Errors.INPUT_ASSET_A_NOT_ERC20
-        );
-        require(
-            outputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 ||
-                outputAssetA.assetType == AztecTypes.AztecAssetType.ETH,
-            Errors.OUTPUT_ASSET_A_NOT_ERC20
-        );
-        require(
-            inputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
-            Errors.INPUT_ASSET_B_NOT_EMPTY
-        );
-        require(
-            outputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
-            Errors.OUTPUT_ASSET_B_NOT_EMPTY
-        );
-
-        if (inputAssetA.assetType == AztecTypes.AztecAssetType.ETH) {
-            inputAsset = address(WETH);
-            outputAsset = outputAssetA.erc20Address;
-            isEth = true;
-        } else if (outputAssetA.assetType == AztecTypes.AztecAssetType.ETH) {
-            inputAsset = inputAssetA.erc20Address;
-            outputAsset = address(WETH);
-            isEth = true;
-        } else {
-            inputAsset = inputAssetA.erc20Address;
-            outputAsset = outputAssetA.erc20Address;
-        }
-    }
-
     function convert(
         AztecTypes.AztecAsset memory inputAssetA,
         AztecTypes.AztecAsset memory inputAssetB,
@@ -166,29 +110,33 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
             bool isAsync
         )
     {
-        (address inputAsset, address outputAsset, bool isEth) = _sanityConvert(
-            inputAssetA,
-            inputAssetB,
-            outputAssetA,
-            outputAssetB
-        );
+        (
+            bool enter,
+            address underlyingAddress,
+            address zkATokenAddress,
+            bool isEth
+        ) = _sanityConvert(
+                inputAssetA,
+                inputAssetB,
+                outputAssetA,
+                outputAssetB
+            );
 
-        address zkAToken = underlyingToZkAToken[inputAsset];
-
-        if (zkAToken == address(0)) {
-            /// The `inputAssetA.erc20Address` must be a zk-asset (or unsupported asset).
-            /// The `outputAssetA.erc20Address` will then be the underlying asset
-            /// Entering with zkAsset and leaving with underlying is exiting
+        if (enter) {
+            outputValueA = _enter(
+                underlyingAddress,
+                zkATokenAddress,
+                totalInputValue,
+                isEth
+            );
+        } else {
             outputValueA = _exit(
-                outputAsset,
+                underlyingAddress,
+                zkATokenAddress,
                 totalInputValue,
                 interactionNonce,
                 isEth
             );
-        } else {
-            /// The `zkAToken` exists, the input must be a supported underlying.
-            /// Enter with the underlying.
-            outputValueA = _enter(inputAsset, totalInputValue, isEth);
         }
     }
 
@@ -200,31 +148,29 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
      */
     function _enter(
         address underlyingAsset,
+        address zkATokenAddress,
         uint256 amount,
         bool isEth
     ) internal returns (uint256) {
         if (isEth) {
             WETH.deposit{value: amount}();
         }
+
         ILendingPool pool = ILendingPool(ADDRESSES_PROVIDER.getLendingPool());
 
         IScaledBalanceToken aToken = IScaledBalanceToken(
             underlyingToAToken[underlyingAsset]
         );
 
-        require(address(aToken) != address(0), Errors.INVALID_ATOKEN);
-        IAccountingToken zkAToken = IAccountingToken(
-            underlyingToZkAToken[underlyingAsset]
-        );
-        require(address(zkAToken) != address(0), Errors.ZK_TOKEN_DONT_EXISTS);
+        IAccountingToken zkAToken = IAccountingToken(zkATokenAddress);
 
-        // 1. Read the scaled balance from the lending pool
+        // 1. Read the scaled balance
         uint256 scaledBalance = aToken.scaledBalanceOf(address(this));
 
-        // 2. Approve totalInputValue to be lent on AAVE
-        IERC20(underlyingAsset).safeIncreaseAllowance(address(pool), amount);
+        // 2. Approve totalInputValue to be deposited
+        IERC20(underlyingAsset).safeApprove(address(pool), amount);
 
-        // 3. Lend totalInputValue of inputAssetA on AAVE lending pool
+        // 3. Deposit totalInputValue of inputAssetA on AAVE lending pool
         pool.deposit(underlyingAsset, amount, address(this), 0);
 
         // 4. Mint the difference between the scaled balance at the start of the interaction and after the deposit as our zkAToken
@@ -244,6 +190,7 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
      */
     function _exit(
         address underlyingAsset,
+        address zkATokenAddress,
         uint256 scaledAmount,
         uint256 interactionNonce,
         bool isEth
@@ -255,16 +202,16 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
             pool.getReserveNormalizedIncome(underlyingAsset)
         );
 
-        // 2. Lend totalInputValue of inputAssetA on AAVE lending pool and return the amount of tokens
+        // 2. Burn the supplied amount of zkAToken as this has now been withdrawn
+        IAccountingToken(underlyingToZkAToken[underlyingAsset]).burn(
+            scaledAmount
+        );
+
+        // 3. Lend totalInputValue of inputAssetA on AAVE lending pool and return the amount of tokens
         uint256 outputValue = pool.withdraw(
             underlyingAsset,
             underlyingAmount,
             address(this)
-        );
-
-        // 3. Burn the supplied amount of zkAToken as this has now been withdrawn
-        IAccountingToken(underlyingToZkAToken[underlyingAsset]).burn(
-            scaledAmount
         );
 
         if (isEth) {
@@ -274,10 +221,7 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
             }(interactionNonce);
         } else {
             // 4. Approve rollup to spend underlying
-            IERC20(underlyingAsset).safeIncreaseAllowance(
-                ROLLUP_PROCESSOR,
-                outputValue
-            );
+            IERC20(underlyingAsset).safeApprove(ROLLUP_PROCESSOR, outputValue);
         }
 
         return outputValue;
@@ -312,14 +256,89 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
         // Assets are approved to the lendingPool, but it does not have a claimRewards function that can be abused.
         // The malicious controller can be used to reenter. But limited what can be entered again as convert can only be entered by the processor.
         // To limit attack surface. Can pull incentives controller from assets and ensure that the assets are actually supported assets.
-        IAaveIncentivesController controller = IAaveIncentivesController(
-            incentivesController
-        );
         return
-            controller.claimRewards(
+            IAaveIncentivesController(incentivesController).claimRewards(
                 assets,
                 type(uint256).max,
                 REWARDS_BENEFICIARY
             );
+    }
+
+    /**
+     * @notice sanity checks from the sender and inputs to the convert function
+     */
+    function _sanityConvert(
+        AztecTypes.AztecAsset memory inputAssetA,
+        AztecTypes.AztecAsset memory inputAssetB,
+        AztecTypes.AztecAsset memory outputAssetA,
+        AztecTypes.AztecAsset memory outputAssetB
+    )
+        internal
+        view
+        returns (
+            bool,
+            address,
+            address,
+            bool
+        )
+    {
+        require(msg.sender == ROLLUP_PROCESSOR, Errors.INVALID_CALLER);
+        require(
+            !(inputAssetA.assetType == AztecTypes.AztecAssetType.ETH &&
+                outputAssetA.assetType == AztecTypes.AztecAssetType.ETH),
+            Errors.INPUT_ASSET_A_AND_OUTPUT_ASSET_A_IS_ETH
+        );
+        require(
+            inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 ||
+                inputAssetA.assetType == AztecTypes.AztecAssetType.ETH,
+            Errors.INPUT_ASSET_A_NOT_ERC20_OR_ETH
+        );
+        require(
+            outputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 ||
+                outputAssetA.assetType == AztecTypes.AztecAssetType.ETH,
+            Errors.OUTPUT_ASSET_A_NOT_ERC20_OR_ETH
+        );
+        require(
+            inputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
+            Errors.INPUT_ASSET_B_NOT_EMPTY
+        );
+        require(
+            outputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
+            Errors.OUTPUT_ASSET_B_NOT_EMPTY
+        );
+
+        address inputAsset = inputAssetA.assetType ==
+            AztecTypes.AztecAssetType.ETH
+            ? address(WETH)
+            : inputAssetA.erc20Address;
+
+        address outputAsset = outputAssetA.assetType ==
+            AztecTypes.AztecAssetType.ETH
+            ? address(WETH)
+            : outputAssetA.erc20Address;
+
+        require(inputAsset != address(0), Errors.INPUT_ASSET_INVALID);
+        require(outputAsset != address(0), Errors.OUTPUT_ASSET_INVALID);
+
+        address underlying;
+        address zkAToken;
+        address zkATokenCandidate = underlyingToZkAToken[inputAsset];
+
+        if (zkATokenCandidate == address(0)) {
+            underlying = outputAsset;
+            zkAToken = underlyingToZkAToken[underlying];
+            require(
+                inputAsset == zkAToken,
+                Errors.INPUT_ASSET_NOT_EQ_ZK_ATOKEN
+            );
+        } else {
+            underlying = inputAsset;
+            zkAToken = zkATokenCandidate;
+        }
+
+        bool isEth = inputAssetA.assetType == AztecTypes.AztecAssetType.ETH ||
+            outputAssetA.assetType == AztecTypes.AztecAssetType.ETH;
+
+        return (inputAsset == underlying, underlying, zkAToken, isEth);
     }
 }

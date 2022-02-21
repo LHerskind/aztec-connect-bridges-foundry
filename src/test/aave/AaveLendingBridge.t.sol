@@ -477,7 +477,7 @@ contract AaveLendingTest is DSTest {
 
             Balances memory balances = _getBalances();
 
-            _accrueInterest(timeDiff + 1); // Ensure that some time have passed
+            _accrueInterest(timeDiff);
 
             _exitWithToken(balances.rollupZk);
 
@@ -508,7 +508,7 @@ contract AaveLendingTest is DSTest {
 
         Balances memory balances = _getBalances();
 
-        _accrueInterest(timeDiff + 1); // Ensure that some time have passed
+        _accrueInterest(timeDiff); // Ensure that some time have passed
 
         _exitWithEther(balances.rollupZk);
 

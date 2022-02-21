@@ -41,15 +41,17 @@ contract AccountingTokenTest is DSTest {
     }
 
     function testBurnOwnToken(uint256 _amount) public {
+        uint256 amount = _amount > 0 ? _amount : 1;
+
         address user = address(0x1);
 
-        token.mint(user, _amount);
+        token.mint(user, amount);
 
-        assertEq(token.totalSupply(), _amount, "Total supply not matching");
-        assertEq(token.balanceOf(user), _amount, "Balance not matching");
+        assertEq(token.totalSupply(), amount, "Total supply not matching");
+        assertEq(token.balanceOf(user), amount, "Balance not matching");
 
         vm.startPrank(user);
-        token.burn(_amount);
+        token.burn(amount);
 
         assertEq(token.totalSupply(), 0, "Total supply not matching");
         assertEq(token.balanceOf(user), 0, "Balance not matching");
@@ -59,16 +61,18 @@ contract AccountingTokenTest is DSTest {
         address user1 = address(0x1);
         address user2 = address(0x2);
 
-        token.mint(user1, _amount);
+        uint256 amount = _amount > 0 ? _amount : 1;
 
-        assertEq(token.totalSupply(), _amount, "Total supply not matching");
-        assertEq(token.balanceOf(user1), _amount, "Balance not matching");
+        token.mint(user1, amount);
+
+        assertEq(token.totalSupply(), amount, "Total supply not matching");
+        assertEq(token.balanceOf(user1), amount, "Balance not matching");
 
         vm.startPrank(user2);
         vm.expectRevert("ERC20: burn amount exceeds allowance");
-        token.burnFrom(user1, _amount);
+        token.burnFrom(user1, amount);
 
-        assertEq(token.totalSupply(), _amount, "Total supply not matching");
-        assertEq(token.balanceOf(user1), _amount, "Balance not matching");
+        assertEq(token.totalSupply(), amount, "Total supply not matching");
+        assertEq(token.balanceOf(user1), amount, "Balance not matching");
     }
 }

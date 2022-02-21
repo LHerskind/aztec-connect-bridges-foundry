@@ -355,7 +355,7 @@ contract AaveLendingTest is DSTest {
             _accrueInterest(timeDiff);
 
             withdrawAmount = uint128(
-                min(withdrawAmount, scaledDepositAmount / 2)
+                cut(withdrawAmount, scaledDepositAmount / 2, minValue / 2)
             );
 
             _exitWithToken(withdrawAmount);
@@ -381,7 +381,9 @@ contract AaveLendingTest is DSTest {
         _enterWithEther(depositAmount);
         _accrueInterest(timeDiff);
 
-        withdrawAmount = uint128(min(withdrawAmount, scaledDepositAmount / 2));
+        withdrawAmount = uint128(
+            cut(withdrawAmount, scaledDepositAmount / 2, minValue / 2)
+        );
 
         _exitWithEther(withdrawAmount);
     }

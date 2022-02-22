@@ -9,9 +9,9 @@ import {IERC20} from "../interfaces/IERC20Permit.sol";
 import {DefiBridgeProxy} from "./DefiBridgeProxy.sol";
 import {AztecTypes} from "./AztecTypes.sol";
 
-import "ds-test/test.sol";
+import "../../lib/ds-test/src/test.sol";
 
-contract MockRollupProcessor is DSTest {
+contract RollupProcessor is DSTest {
     DefiBridgeProxy private bridgeProxy;
 
     struct DefiInteraction {
@@ -27,10 +27,6 @@ contract MockRollupProcessor is DSTest {
 
     bytes4 private constant TRANSFER_FROM_SELECTOR = 0x23b872dd; // bytes4(keccak256('transferFrom(address,address,uint256)'));
     mapping(uint256 => uint256) ethPayments;
-    // We need to cap the amount of gas sent to the DeFi bridge contract for two reasons.
-    // 1: To provide consistency to rollup providers around costs.
-    // 2: To prevent griefing attacks where a bridge consumes all our gas.
-    uint256 private gasSentToBridgeProxy = 300000;
 
     // DEFI_BRIDGE_PROXY_CONVERT_SELECTOR = function signature of:
     //   function convert(
@@ -46,11 +42,22 @@ contract MockRollupProcessor is DSTest {
     // N.B. this is the selector of the 'convert' function of the DefiBridgeProxy contract.
     //      This has a different interface to the IDefiBridge.convert function
     bytes4 private constant DEFI_BRIDGE_PROXY_CONVERT_SELECTOR = 0xffd8e7b7;
-    event AztecBridgeInteraction(
-        address indexed bridgeAddress,
-        uint256 outputValueA,
-        uint256 outputValueB,
-        bool isAsync
+    event DefiBridgeProcessed(
+        uint256 indexed bridgeId,
+        uint256 indexed nonce,
+        uint256 totalInputValue,
+        uint256 totalOutputValueA,
+        uint256 totalOutputValueB,
+        bool result
+    );
+
+    event AsyncDefiBridgeProcessed(
+        uint256 indexed bridgeId,
+        uint256 indexed nonce,
+        uint256 totalInputValue,
+        uint256 totalOutputValueA,
+        uint256 totalOutputValueB,
+        bool result
     );
 
     function receiveEthFromBridge(uint256 interactionNonce) external payable {
@@ -110,13 +117,12 @@ contract MockRollupProcessor is DSTest {
             interaction.bridgeAddress != address(0),
             "Rollup Contract: UNKNOWN_NONCE"
         );
-        bool isReady = IDefiBridge(interaction.bridgeAddress).canFinalise(
-            interaction.interactionNonce
-        );
-        require(isReady, "Rollup Contract: BRIDGE_NOT_READY");
-        (uint256 outputValueA, uint256 outputValueB) = IDefiBridge(
-            interaction.bridgeAddress
-        ).finalise(
+
+        (
+            uint256 outputValueA,
+            uint256 outputValueB,
+            bool interactionComplete
+        ) = IDefiBridge(interaction.bridgeAddress).finalise(
                 interaction.inputAssetA,
                 interaction.inputAssetB,
                 interaction.outputAssetA,
@@ -156,11 +162,13 @@ contract MockRollupProcessor is DSTest {
             );
         }
 
-        emit AztecBridgeInteraction(
-            interaction.bridgeAddress,
+        emit DefiBridgeProcessed(
+            0,
+            interaction.interactionNonce,
+            interaction.totalInputValue,
             outputValueA,
             outputValueB,
-            false
+            true
         );
     }
 
@@ -217,21 +225,33 @@ contract MockRollupProcessor is DSTest {
             )
         );
 
-        require(success, "Bridge call fail");
-
         if (success) {
             (outputValueA, outputValueB, isAsync) = abi.decode(
                 result,
                 (uint256, uint256, bool)
             );
 
-            emit AztecBridgeInteraction(
-                bridgeAddress,
+            emit DefiBridgeProcessed(
+                0,
+                interactionNonce,
+                totalInputValue,
                 outputValueA,
                 outputValueB,
-                isAsync
+                true
             );
         }
+        require(success, "Interation Failed");
+        // else {
+
+        //     emit DefiBridgeProcessed(
+        //     0,
+        //     interactionNonce,
+        //     totalInputValue,
+        //     totalInputValue,
+        //     inputAssetB.NOT_USED || inputAssetB.,
+        //     success
+        // );
+        // }
         // TODO: Should probaby emit an event for failed?
     }
 }

@@ -9,7 +9,7 @@ import {AztecTypes} from "./AztecTypes.sol";
 
 import {TokenTransfers} from "../libraries/TokenTransfers.sol";
 
-import "ds-test/test.sol";
+import "../../lib/ds-test/src/test.sol";
 
 contract DefiBridgeProxy is DSTest {
     bytes4 private constant BALANCE_OF_SELECTOR = 0x70a08231; // bytes4(keccak256('balanceOf(address)'));
@@ -26,11 +26,21 @@ contract DefiBridgeProxy is DSTest {
     );
     error INSUFFICIENT_ETH_PAYMENT();
 
-    event AztecBridgeInteraction(
-        address indexed bridgeAddress,
-        uint256 outputValueA,
-        uint256 outputValueB,
-        bool isAsync
+    event DefiBridgeProcessed(
+        uint256 indexed bridgeId,
+        uint256 indexed nonce,
+        uint256 totalInputValue,
+        uint256 totalOutputValueA,
+        uint256 totalOutputValueB,
+        bool result
+    );
+    event AsyncDefiBridgeProcessed(
+        uint256 indexed bridgeId,
+        uint256 indexed nonce,
+        uint256 totalInputValue,
+        uint256 totalOutputValueA,
+        uint256 totalOutputValueB,
+        bool result
     );
 
     /**
@@ -111,10 +121,10 @@ contract DefiBridgeProxy is DSTest {
      */
     function convert(
         address bridgeAddress,
-        AztecTypes.AztecAsset memory inputAssetA,
-        AztecTypes.AztecAsset memory inputAssetB,
-        AztecTypes.AztecAsset memory outputAssetA,
-        AztecTypes.AztecAsset memory outputAssetB,
+        AztecTypes.AztecAsset calldata inputAssetA,
+        AztecTypes.AztecAsset calldata inputAssetB,
+        AztecTypes.AztecAsset calldata outputAssetA,
+        AztecTypes.AztecAsset calldata outputAssetB,
         uint256 totalInputValue,
         uint256 interactionNonce,
         uint256 auxInputData, // (auxData)
@@ -131,6 +141,15 @@ contract DefiBridgeProxy is DSTest {
             // Transfer totalInputValue to the bridge contract if erc20. ETH is sent on call to convert.
             TokenTransfers.safeTransferTo(
                 inputAssetA.erc20Address,
+                bridgeAddress,
+                totalInputValue
+            );
+        }
+
+        if (inputAssetB.assetType == AztecTypes.AztecAssetType.ERC20) {
+            // Transfer totalInputValue to the bridge contract if erc20. ETH is sent on call to convert.
+            TokenTransfers.safeTransferTo(
+                inputAssetB.erc20Address,
                 bridgeAddress,
                 totalInputValue
             );

@@ -6,7 +6,7 @@ import {Vm} from "./../Vm.sol";
 
 // Aztec specific imports
 import {DefiBridgeProxy} from "aztec/DefiBridgeProxy.sol";
-import {MockRollupProcessor} from "aztec/MockRollupProcessor.sol";
+import {RollupProcessor} from "aztec/RollupProcessor.sol";
 import {AztecTypes} from "aztec/AztecTypes.sol";
 import {IDefiBridge} from "./../../interfaces/IDefiBridge.sol";
 
@@ -36,7 +36,7 @@ contract AaveLendingTest is DSTest {
 
     // Aztec defi bridge specific storage
     DefiBridgeProxy defiBridgeProxy;
-    MockRollupProcessor rollupProcessor;
+    RollupProcessor rollupProcessor;
 
     // Aave lending bridge specific storage
     ILendingPoolAddressesProvider constant ADDRESSES_PROVIDER =
@@ -74,7 +74,7 @@ contract AaveLendingTest is DSTest {
 
     function _aztecPreSetup() internal {
         defiBridgeProxy = new DefiBridgeProxy();
-        rollupProcessor = new MockRollupProcessor(address(defiBridgeProxy));
+        rollupProcessor = new RollupProcessor(address(defiBridgeProxy));
     }
 
     function _tokenSetup(IERC20 _token) internal {

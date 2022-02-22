@@ -93,10 +93,10 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
     }
 
     function convert(
-        AztecTypes.AztecAsset memory inputAssetA,
-        AztecTypes.AztecAsset memory inputAssetB,
-        AztecTypes.AztecAsset memory outputAssetA,
-        AztecTypes.AztecAsset memory outputAssetB,
+        AztecTypes.AztecAsset calldata inputAssetA,
+        AztecTypes.AztecAsset calldata inputAssetB,
+        AztecTypes.AztecAsset calldata outputAssetA,
+        AztecTypes.AztecAsset calldata outputAssetB,
         uint256 totalInputValue,
         uint256 interactionNonce,
         uint64 auxData
@@ -138,6 +138,8 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
                 isEth
             );
         }
+
+        return (outputValueA, 0, false);
     }
 
     /**
@@ -227,23 +229,6 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
         return outputValue;
     }
 
-    function canFinalise(
-        uint256 /*interactionNonce*/
-    ) external view override returns (bool) {
-        return false;
-    }
-
-    function finalise(
-        AztecTypes.AztecAsset calldata inputAssetA,
-        AztecTypes.AztecAsset calldata inputAssetB,
-        AztecTypes.AztecAsset calldata outputAssetA,
-        AztecTypes.AztecAsset calldata outputAssetB,
-        uint256 interactionNonce,
-        uint64 auxData
-    ) external payable override returns (uint256, uint256) {
-        require(false);
-    }
-
     /**
      * @notice Claim liquidity mining rewards and transfer to the beneficiary
      */
@@ -262,6 +247,26 @@ contract AaveLendingBridge is IAaveLendingBridge, IDefiBridge {
                 type(uint256).max,
                 REWARDS_BENEFICIARY
             );
+    }
+
+    function finalise(
+        AztecTypes.AztecAsset calldata inputAssetA,
+        AztecTypes.AztecAsset calldata inputAssetB,
+        AztecTypes.AztecAsset calldata outputAssetA,
+        AztecTypes.AztecAsset calldata outputAssetB,
+        uint256 interactionNonce,
+        uint64 auxData
+    )
+        external
+        payable
+        override(IDefiBridge)
+        returns (
+            uint256 outputValueA,
+            uint256 outputValueB,
+            bool interactionComplete
+        )
+    {
+        require(false, "Not implemented");
     }
 
     /**

@@ -3,6 +3,7 @@
 pragma solidity >=0.6.10 <=0.8.10;
 pragma experimental ABIEncoderV2;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -10,12 +11,14 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 
 import {IDefiBridge} from "../../interfaces/IDefiBridge.sol";
 import {ILendingPoolAddressesProvider} from "./interfaces/ILendingPoolAddressesProvider.sol";
-import {IPool} from "./interfaces/IPool.sol";
+import {ILendingPool} from "./interfaces/ILendingPool.sol";
 import {IScaledBalanceToken} from "./interfaces/IScaledBalanceToken.sol";
 import {IAaveIncentivesController} from "./interfaces/IAaveIncentivesController.sol";
 import {IAccountingToken} from "./interfaces/IAccountingToken.sol";
 
-import {AztecTypes} from "../../aztec/AztecTypes.sol";
+import {IWETH9} from "./interfaces/IWETH9.sol";
+
+import {AztecTypes} from "aztec/AztecTypes.sol";
 
 import {AccountingToken} from "./AccountingToken.sol";
 import {WadRayMath} from "./libraries/WadRayMath.sol";
@@ -25,66 +28,46 @@ import {Errors} from "./libraries/Errors.sol";
 
 import {AaveBorrowingBridgeProxy} from "./AaveBorrowingProxy.sol";
 
-contract AaveBorrowingBridge is IDefiBridge {
+contract AaveBorrowingBridge is IDefiBridge, Ownable {
     using SafeMath for uint256;
     using WadRayMath for uint256;
+    using SafeERC20 for IERC20;
 
-    address public immutable rollupProcessor;
-    ILendingPoolAddressesProvider public immutable addressesProvider;
+    address public immutable ROLLUP_PROCESSOR;
+    ILendingPoolAddressesProvider public immutable ADDRESSES_PROVIDER;
+
+    // TODO: Need access control for setting up stuff.
+
+    IWETH9 public constant WETH =
+        IWETH9(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
     // index => proxy address
     mapping(uint256 => address) public proxies;
     uint256 public proxyCount;
 
     constructor(address _rollupProcessor, address _addressesProvider) {
-        rollupProcessor = _rollupProcessor;
+        ROLLUP_PROCESSOR = _rollupProcessor;
         /// @dev addressesProvider is used to fetch pool, used in case Aave governance update pool proxy
-        addressesProvider = ILendingPoolAddressesProvider(_addressesProvider);
+        ADDRESSES_PROVIDER = ILendingPoolAddressesProvider(_addressesProvider);
     }
 
     function deployProxy(
         address _collateralAsset,
         address _borrowAsset,
         uint256 _initialRatio
-    ) external {
+    ) external onlyOwner returns (uint256) {
+        // TODO: Can be made much more efficient with minimal proxies.
         uint256 proxyId = proxyCount++;
         proxies[proxyId] = address(
             new AaveBorrowingBridgeProxy(
-                address(addressesProvider),
+                address(ADDRESSES_PROVIDER),
                 _collateralAsset,
                 _borrowAsset,
                 _initialRatio
             )
         );
+        return proxyId;
         // TODO: Emit some event
-    }
-
-    /**
-     * @notice sanity checks from the sender and inputs to the convert function
-     */
-    function _sanityCheckConvert(
-        AztecTypes.AztecAsset memory inputAssetA,
-        AztecTypes.AztecAsset memory inputAssetB,
-        AztecTypes.AztecAsset memory outputAssetA,
-        AztecTypes.AztecAsset memory outputAssetB
-    ) public view {
-        require(msg.sender == rollupProcessor, Errors.INVALID_CALLER);
-        require(
-            inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20,
-            Errors.INPUT_ASSET_A_NOT_ERC20
-        );
-        require(
-            inputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
-            Errors.INPUT_ASSET_B_NOT_EMPTY
-        );
-        require(
-            outputAssetA.assetType == AztecTypes.AztecAssetType.ERC20,
-            Errors.OUTPUT_ASSET_A_NOT_ERC20
-        );
-        require(
-            outputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
-            Errors.OUTPUT_ASSET_B_NOT_EMPTY
-        );
     }
 
     function convert(
@@ -105,35 +88,34 @@ contract AaveBorrowingBridge is IDefiBridge {
             bool isAsync
         )
     {
-        _sanityCheckConvert(
-            inputAssetA,
-            inputAssetB,
-            outputAssetA,
-            outputAssetB
+        AaveBorrowingBridgeProxy proxy = AaveBorrowingBridgeProxy(
+            proxies[uint256(auxData)]
         );
 
-        /*        address zkAToken = underlyingToZkAToken[inputAssetA.erc20Address];
+        (
+            address inputAsset,
+            address collateralAsset,
+            bool isEth
+        ) = _sanityConvert(
+                inputAssetA,
+                inputAssetB,
+                outputAssetA,
+                outputAssetB,
+                proxy
+            );
 
-        if (zkAToken == address(0)) {
-            /// The `inputAssetA.erc20Address` must be a zk-asset (or unsupported asset).
-            /// The `outputAssetA.erc20Address` will then be the underlying asset
-            /// Entering with zkAsset and leaving with underlying is exiting
-            outputValueA = _exit(outputAssetA.erc20Address, totalInputValue);
+        if (inputAsset == collateralAsset) {
+            (outputValueA, outputValueB) = _enter(proxy, totalInputValue);
         } else {
-            /// The `zkAToken` exists, the input must be a supported underlying.
-            /// Enter with the underlying.
-            outputValueA = _enter(inputAssetA.erc20Address, totalInputValue);
-        }*/
+            // input asset == accountAsset, ensured by _sanityConvert
+            outputValueA = _exit(proxy, totalInputValue);
+        }
     }
 
-    function _enter(uint256 index, uint256 collateralAmount)
+    function _enter(AaveBorrowingBridgeProxy proxy, uint256 collateralAmount)
         internal
         returns (uint256, uint256)
     {
-        AaveBorrowingBridgeProxy proxy = AaveBorrowingBridgeProxy(
-            proxies[index]
-        );
-
         (
             uint256 lpTokenAmount,
             uint256 debtAmount,
@@ -142,9 +124,9 @@ contract AaveBorrowingBridge is IDefiBridge {
             IERC20 borrowedAsset
         ) = proxy.enter(collateralAmount);
 
-        IPool pool = IPool(addressesProvider.getLendingPool());
+        ILendingPool pool = ILendingPool(ADDRESSES_PROVIDER.getLendingPool());
 
-        collateralAsset.safeIncreaseAllowance(address(pool), collateralAmount);
+        collateralAsset.safeApprove(address(pool), collateralAmount);
         pool.deposit(
             address(collateralAsset),
             collateralAmount,
@@ -154,26 +136,22 @@ contract AaveBorrowingBridge is IDefiBridge {
 
         pool.borrow(address(borrowedAsset), debtAmount, 2, 0, address(proxy));
 
-        // TODO: Need to use safeApprove as USDT is non-standard! Not sure if people would borrow, but if they are going to it will mess us up.
-
         // Approve rollupProcessor to pull borrowed asset and lp tokens.
-        borrowedAsset.safeIncreaseAllowance(rollupProcessor, debtAmount);
-        lpToken.safeIncreaseAllowance(rollupProcessor, lpTokenAmount);
+        borrowedAsset.safeApprove(ROLLUP_PROCESSOR, debtAmount);
+        lpToken.safeApprove(ROLLUP_PROCESSOR, lpTokenAmount);
 
         return (lpTokenAmount, debtAmount);
     }
 
-    function _exit(uint256 index, uint256 lpAmount) internal returns (uint256) {
-        AaveBorrowingBridgeProxy proxy = AaveBorrowingBridgeProxy(
-            proxies[index]
-        );
+    function _exit(AaveBorrowingBridgeProxy proxy, uint256 lpAmount)
+        internal
+        returns (uint256)
+    {
         (uint256 collateralAmount, IERC20 collateralAsset) = proxy.exit(
             lpAmount
         );
 
-        collateralAsset.safeIncreaseAllowance(
-            address(rollupProcessor, collateralAmount)
-        );
+        collateralAsset.safeApprove(ROLLUP_PROCESSOR, collateralAmount);
 
         return collateralAmount;
     }
@@ -193,5 +171,106 @@ contract AaveBorrowingBridge is IDefiBridge {
         uint64 auxData
     ) external payable override returns (uint256, uint256) {
         require(false);
+    }
+
+    /**
+     * @notice sanity checks from the sender and inputs to the convert function
+     */
+    function _sanityConvert(
+        AztecTypes.AztecAsset memory inputAssetA,
+        AztecTypes.AztecAsset memory inputAssetB,
+        AztecTypes.AztecAsset memory outputAssetA,
+        AztecTypes.AztecAsset memory outputAssetB,
+        AaveBorrowingBridgeProxy proxy
+    )
+        internal
+        view
+        returns (
+            address,
+            address,
+            bool
+        )
+    {
+        require(msg.sender == ROLLUP_PROCESSOR, Errors.INVALID_CALLER);
+        require(
+            !(inputAssetA.assetType == AztecTypes.AztecAssetType.ETH &&
+                outputAssetA.assetType == AztecTypes.AztecAssetType.ETH),
+            Errors.INPUT_ASSET_A_AND_OUTPUT_ASSET_A_IS_ETH
+        );
+        // Check that input asset A type is valid
+        require(
+            inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 ||
+                inputAssetA.assetType == AztecTypes.AztecAssetType.ETH,
+            Errors.INPUT_ASSET_A_NOT_ERC20_OR_ETH
+        );
+        // Check that input asset B type is not used
+        require(
+            inputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
+            Errors.INPUT_ASSET_B_NOT_EMPTY
+        );
+        // check that output asset A type is valid
+        require(
+            outputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 ||
+                outputAssetA.assetType == AztecTypes.AztecAssetType.ETH,
+            Errors.OUTPUT_ASSET_A_NOT_ERC20_OR_ETH
+        );
+        require(
+            outputAssetB.assetType == AztecTypes.AztecAssetType.ERC20 ||
+                outputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
+            "ERROR ON OUTPUT ASSET B TYPE"
+        );
+
+        (
+            address collateralAsset,
+            address debtAsset,
+            address accountingAsset
+        ) = proxy.getUnderlyings();
+
+        address inputAsset = inputAssetA.assetType ==
+            AztecTypes.AztecAssetType.ETH
+            ? address(WETH)
+            : inputAssetA.erc20Address;
+        address oAssetA = outputAssetA.assetType ==
+            AztecTypes.AztecAssetType.ETH
+            ? address(WETH)
+            : outputAssetA.erc20Address;
+
+        require(
+            inputAsset == collateralAsset || inputAsset == accountingAsset,
+            "INVALID INPUT ASSET"
+        );
+
+        if (inputAsset == collateralAsset) {
+            // Entering, check outputs
+            require(
+                oAssetA == accountingAsset,
+                "OUTPUT ASSET A NOT ACCOUNTING ASSET"
+            );
+            require(
+                outputAssetB.assetType == AztecTypes.AztecAssetType.ERC20,
+                "OUTPUT ASSET B NOT ERC20"
+            );
+            require(
+                outputAssetB.erc20Address == debtAsset,
+                "OUTPUT ASSET B NOT DEBT ASSET"
+            );
+        }
+
+        if (inputAsset == accountingAsset) {
+            // Exiting, check outputs
+            require(
+                oAssetA == collateralAsset,
+                "OUTPUT ASSET A NOT COLLATERAL ASSET"
+            );
+            require(
+                outputAssetB.assetType == AztecTypes.AztecAssetType.NOT_USED,
+                Errors.OUTPUT_ASSET_B_NOT_EMPTY
+            );
+        }
+
+        bool isEth = inputAssetA.assetType == AztecTypes.AztecAssetType.ETH ||
+            outputAssetA.assetType == AztecTypes.AztecAssetType.ETH;
+
+        return (inputAsset, collateralAsset, isEth);
     }
 }
